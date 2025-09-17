@@ -35,6 +35,11 @@ Install using pip:
 
 See more at https://github.com/rbturnbull/WiDiT
 
+Usage
+==================================
+
+MORE DETAILS TO COME
+
 .. end-quickstart
 
 
@@ -43,7 +48,7 @@ Credits
 
 .. start-credits
 
-Robert Turnbull, Ashkan Pakzad, Simon Mutch, Tim Gureyev
+Robert Turnbull
 
 Created using torchapp (https://github.com/rbturnbull/torchapp).
 
