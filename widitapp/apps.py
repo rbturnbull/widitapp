@@ -2,7 +2,7 @@ from pathlib import Path
 from cluey import Cluey, main, tool, method
 
 
-class Dosefusion(Cluey):
+class WiDitApp(Cluey):
     @method
     def model(
         self,
