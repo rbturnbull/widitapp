@@ -1,1 +1,1 @@
-from .apps import WiDitApp
+from .apps import WiDiTApp
