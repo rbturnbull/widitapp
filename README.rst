@@ -4,7 +4,7 @@ Dosefusion
 
 .. start-badges
 
-|testing badge| |coverage badge| |docs badge| |black badge| |torchapp badge|
+|testing badge| |coverage badge| |docs badge| |black badge|
 
 .. |testing badge| image:: https://github.com/quell-devs/dosefusion/actions/workflows/testing.yml/badge.svg
     :target: https://github.com/quell-devs/dosefusion/actions
