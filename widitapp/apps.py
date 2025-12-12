@@ -1,3 +1,4 @@
+from typing import Sequence
 from pathlib import Path
 from cluey import Cluey, main, tool, method
 
@@ -6,32 +7,54 @@ class WiDiTApp(Cluey):
     @method
     def model(
         self,
-        model: str = "WiDiT3D-B/2",
         input_size: int = 100,
         in_channels: int = 1,
         use_diffusion: bool = True,   
-        verbose:bool=False,     
+        verbose:bool=False,
+        preset: str = "",
+        hidden_size: int = 768,
+        depth: int = 12,
+        num_heads: int = 12,
+        patch_size: int | Sequence[int] = 2,
+        window_size: int | Sequence[int] = 4,
+        mlp_ratio: float = 4.0,
+        use_flash_attention: bool | str = "auto",
         **kwargs,
     ):
-        from widit import PRESETS
-        assert model in PRESETS, f"Model '{model}' not in PRESETS: {list(PRESETS.keys())}"
+        from widit import WiDiT, PRESETS
 
-        model_name = model
+        model_kwargs = dict()
+        
+        if preset:
+            assert preset in PRESETS, f"Model '{preset}' not in PRESETS: {list(PRESETS.keys())}"
+            instantiator = PRESETS[preset]
+        else:
+            instantiator = WiDiT
+            model_kwargs = dict(
+                hidden_size=hidden_size,
+                depth=depth,
+                num_heads=num_heads,
+                patch_size=patch_size,
+            )
 
-        model = PRESETS[model_name](
+        model = instantiator(
             input_size=input_size,
             in_channels=in_channels,
-            learn_sigma=use_diffusion, # if using diffusion, learn sigma
+            out_channels=1+int(use_diffusion),
             use_conditioning=use_diffusion,
+            window_size=window_size,
+            mlp_ratio=mlp_ratio,
+            use_flash_attention=use_flash_attention,
+            **model_kwargs
         )
 
         if verbose:
             total = sum(p.numel() for p in model.parameters())
-            print(f"Model: {model_name}")
+            print(f"Model: {instantiator}")
             print(f"Model Summary:\n{model}")
-            print(f"Model '{model_name}' has {total:,} parameters")
+            print(f"Model has {total:,} parameters")
             trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print(f"Model '{model_name}' has {trainable:,} trainable parameters")
+            print(f"Model has {trainable:,} trainable parameters")
 
         return model
 
