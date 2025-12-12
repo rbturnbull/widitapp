@@ -18,7 +18,7 @@ class WiDiTApp(Cluey):
         patch_size: int = 2,
         window_size: int = 4,
         mlp_ratio: float = 4.0,
-        use_flash_attention: bool | str = "auto",
+        use_flash_attention: str = "auto",
         **kwargs,
     ):
         from widit import WiDiT, PRESETS
