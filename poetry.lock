@@ -4350,7 +4350,7 @@ files = [
 
 [[package]]
 name = "widit"
-version = "0.1.1a1"
+version = "0.1.1a2"
 description = "Windowed Diffusion Transformer in 2D and 3D"
 optional = false
 python-versions = ">=3.10,<3.14"
@@ -4366,7 +4366,7 @@ torch = ">=2.2.0"
 type = "git"
 url = "ssh://git@github.com/rbturnbull/WiDiT.git"
 reference = "main"
-resolved_reference = "d33d21319c15b8c2427a041f7a76ef815dea8157"
+resolved_reference = "fe9cb545a5038aa9fdbb320b2f3da69801fef1df"
 
 [[package]]
 name = "zipp"
