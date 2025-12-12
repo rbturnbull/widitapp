@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "WiDiTApp"
-version = "0.1.1"
+version = "0.1.2"
 description = "An app to use the WiDiT model."
 authors = ["Robert Turnbull"]
 license = "Apache-2.0"
