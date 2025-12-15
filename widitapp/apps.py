@@ -29,6 +29,7 @@ class WiDiTApp(Cluey):
 
             return Unet(
                 in_channels=in_channels,
+                out_channels=1+int(use_diffusion),
                 filters=32,
                 kernel_size=3,
                 layers=4,
