@@ -133,6 +133,7 @@ class Unet(nn.Module):
         kernel_size: int,
         layers: int,
         spatial_dims: int = 3,
+        out_channels: int|None = None,
         use_conditioning: bool = True,
         timestep_embed_dim: int | None = None,
     ):
@@ -140,6 +141,8 @@ class Unet(nn.Module):
 
         assert spatial_dims in (2, 3), "spatial_dims must be 2 or 3"
         assert layers > 0, "Layers must be positive"
+
+        out_channels = out_channels or in_channels
 
         if use_conditioning:
             in_channels *= 2  # Concatenate conditioning channel
@@ -225,7 +228,7 @@ class Unet(nn.Module):
             conv(
                 spatial_dims,
                 filters,
-                in_channels,
+                out_channels,
                 kernel_size=1,
                 padding=0,
                 activation=None,

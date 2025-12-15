@@ -9,6 +9,7 @@ class WiDiTApp(Cluey):
         self,
         dim:int=2,
         input_size: int = 100,
+        unet:bool=False,
         in_channels: int = 1,
         use_diffusion: bool = True,   
         verbose:bool=False,
@@ -22,6 +23,19 @@ class WiDiTApp(Cluey):
         use_flash_attention: bool=True,
         **kwargs,
     ):
+        
+        if unet:
+            from .models import Unet
+
+            return Unet(
+                in_channels=in_channels,
+                filters=32,
+                kernel_size=3,
+                layers=4,
+                spatial_dims=dim,
+                use_conditioning=use_diffusion,
+            )
+
         from widit import WiDiT, PRESETS
 
         model_kwargs = dict()
