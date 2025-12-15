@@ -7,6 +7,7 @@ class WiDiTApp(Cluey):
     @method
     def model(
         self,
+        dim:int=2,
         input_size: int = 100,
         in_channels: int = 1,
         use_diffusion: bool = True,   
@@ -31,6 +32,7 @@ class WiDiTApp(Cluey):
         else:
             instantiator = WiDiT
             model_kwargs = dict(
+                spatial_dim=dim,
                 hidden_size=hidden_size,
                 depth=depth,
                 num_heads=num_heads,
