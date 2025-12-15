@@ -20,6 +20,9 @@ class WiDiTApp(Cluey):
         patch_size: int = 2,
         window_size: int = 4,
         mlp_ratio: float = 4.0,
+        filters:int = 64,
+        kernel:int=3,
+        layers:int=4,
         use_flash_attention: bool=True,
         **kwargs,
     ):
@@ -30,9 +33,9 @@ class WiDiTApp(Cluey):
             return Unet(
                 in_channels=in_channels,
                 out_channels=1+int(use_diffusion),
-                filters=32,
-                kernel_size=3,
-                layers=4,
+                filters=filters,
+                kernel_size=kernel,
+                layers=layers,
                 spatial_dims=dim,
                 use_conditioning=use_diffusion,
             )
