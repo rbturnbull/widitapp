@@ -133,12 +133,17 @@ class Unet(nn.Module):
         kernel_size: int,
         layers: int,
         spatial_dims: int = 3,
+        use_conditioning: bool = True,
         timestep_embed_dim: int | None = None,
     ):
         super().__init__()
 
         assert spatial_dims in (2, 3), "spatial_dims must be 2 or 3"
         assert layers > 0, "Layers must be positive"
+
+        if use_conditioning:
+            in_channels *= 2  # Concatenate conditioning channel
+        self.use_conditioning = use_conditioning
 
         self.layers = layers
         self.spatial_dims = spatial_dims
@@ -245,11 +250,21 @@ class Unet(nn.Module):
         self, 
         x, 
         timestep: torch.Tensor | None = None,
-) -> torch.Tensor:
+        *,
+        conditioned: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         skip_conn = []
         timestep_embedding = (
             self.timestep_embedder(timestep) if timestep is not None else None
         )
+
+        # Concatenate conditioning if provided
+        assert self.use_conditioning == (conditioned is not None), (
+            "Conditioning tensor must be provided if and only if the model was "
+            "initialized with `use_conditioning=True`."
+        )
+        if conditioned is not None:
+            x = torch.cat((x, conditioned), dim=1)
 
         x = self.inconv(x)
         x = self._add_timestep(x, timestep_embedding, self.in_time_proj)
