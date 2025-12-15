@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import torch.nn.functional as F
 
 
 class TimestepEmbedder(nn.Module):
@@ -285,10 +286,26 @@ class Unet(nn.Module):
         x = self._add_timestep(x, timestep_embedding, self.bottleneck_time_proj)
 
         for i in range(self.layers - 1):
-            x = self.up_blocks[i](torch.cat((skip_conn.pop(), x), dim=1))
+            skip = skip_conn.pop()
+            if x.shape[2:] != skip.shape[2:]:
+                x = F.interpolate(
+                    x,
+                    size=skip.shape[2:],
+                    mode=get_upsample_mode(self.spatial_dims),
+                    align_corners=False,
+                )
+            x = self.up_blocks[i](torch.cat((skip, x), dim=1))
             x = self._add_timestep(x, timestep_embedding, self.up_time_projs[i])
 
-        x = torch.cat((skip_conn.pop(), x), dim=1)
+        skip = skip_conn.pop()
+        if x.shape[2:] != skip.shape[2:]:
+            x = F.interpolate(
+                x,
+                size=skip.shape[2:],
+                mode=get_upsample_mode(self.spatial_dims),
+                align_corners=False,
+            )
+        x = torch.cat((skip, x), dim=1)
         x = self._add_timestep(x, timestep_embedding, self.out_time_proj)
         x = self.outconv(x)
 
