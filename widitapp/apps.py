@@ -39,6 +39,7 @@ class WiDiTApp(Cluey):
                 out_channels=1+int(use_diffusion),
                 stem_stride=dino_stem_stride,
                 num_stages=dino_num_stages,
+                use_conditioning=use_diffusion,
                 freeze=False,
             )
         
