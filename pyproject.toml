@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "WiDiTApp"
-version = "0.1.4"
+version = "0.1.5"
 description = "An app to use the WiDiT model."
 authors = ["Robert Turnbull"]
 license = "Apache-2.0"
@@ -25,6 +25,7 @@ diffusers = ">=0.35.1"
 accelerate = ">=1.10.1"
 pandas = ">=2.3.2"
 wandb = ">=0.21.4"
+transformers = "^4.57.3"
 
 
 [tool.poetry.group.dev.dependencies]

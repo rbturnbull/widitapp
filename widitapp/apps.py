@@ -9,6 +9,7 @@ class WiDiTApp(Cluey):
         self,
         dim:int=2,
         input_size: int = 100,
+        dino:bool=False,
         unet:bool=False,
         in_channels: int = 1,
         use_diffusion: bool = True,   
@@ -23,9 +24,23 @@ class WiDiTApp(Cluey):
         filters:int = 64,
         kernel:int=3,
         layers:int=4,
+        dino_size: str = "base",
+        dino_stem_stride: int = 1,
+        dino_num_stages: int = 2,
         use_flash_attention: bool=True,
         **kwargs,
     ):
+        if dino:
+            from .dino import convnext_unet
+
+            return convnext_unet(
+                size=dino_size,
+                in_channels=in_channels,
+                out_channels=1+int(use_diffusion),
+                stem_stride=dino_stem_stride,
+                num_stages=dino_num_stages,
+                freeze=False,
+            )
         
         if unet:
             from .models import Unet
