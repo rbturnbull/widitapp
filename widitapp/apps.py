@@ -27,6 +27,7 @@ class WiDiTApp(Cluey):
         dino_size: str = "base",
         dino_stem_stride: int = 1,
         dino_num_stages: int = 2,
+        dino_freeze: bool = False,
         use_flash_attention: bool=True,
         **kwargs,
     ):
@@ -40,7 +41,7 @@ class WiDiTApp(Cluey):
                 stem_stride=dino_stem_stride,
                 num_stages=dino_num_stages,
                 use_conditioning=use_diffusion,
-                freeze=False,
+                freeze=dino_freeze,
             )
         
         if unet:

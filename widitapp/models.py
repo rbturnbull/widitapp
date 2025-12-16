@@ -136,7 +136,7 @@ class Unet(nn.Module):
         spatial_dims: int = 3,
         out_channels: int|None = None,
         use_conditioning: bool = True,
-        timestep_embed_dim: int | None = None,
+        timestep_embed_dim: int = 128,
     ):
         super().__init__()
 
