@@ -62,9 +62,11 @@ def _run_validation_loop(
     dtype: torch.dtype,
     use_diffusion: bool,
     criterion = torch.nn.SmoothL1Loss(reduction="mean"),
+    timestep_seed: int = 42,
 ) -> float:
     model_for_eval.eval()
     total_loss, total_batches = 0.0, 0
+    rng = torch.Generator(device=device).manual_seed(timestep_seed)
 
     for batch in track(dataloader, total=len(dataloader), description="Validation:"):
         # Expect (x, target)
@@ -77,7 +79,13 @@ def _run_validation_loop(
 
         if use_diffusion:
             # Mirror training: model(input=target, conditioned=x)
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+            t = torch.randint(
+                0,
+                diffusion.num_timesteps,
+                (x.shape[0],),
+                device=device,
+                generator=rng,
+            )
             loss_dict = diffusion.training_losses(model_for_eval, target, t, dict(conditioned=x))
             loss = loss_dict["loss"].mean()
         else:
@@ -273,6 +281,7 @@ def train(
                 dtype=train_dtype,
                 use_diffusion=use_diffusion,
                 criterion=criterion,
+                timestep_seed=0,  # deterministic validation timesteps
             )
             if accelerator.is_main_process:
                 logger.info(f"(epoch={epoch:03d}) val/loss={val_loss:.4f}")
