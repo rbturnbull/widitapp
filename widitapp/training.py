@@ -86,7 +86,12 @@ def _run_validation_loop(
                 device=device,
                 generator=rng,
             )
-            noise = torch.randn_like(target, generator=rng)
+            noise = torch.randn(
+                target.shape,
+                dtype=target.dtype,
+                device=target.device,
+                generator=rng,
+            )
             loss_dict = diffusion.training_losses(
                 model_for_eval,
                 target,
@@ -94,7 +99,7 @@ def _run_validation_loop(
                 dict(conditioned=x),
                 noise=noise,
             )
-            loss = loss_dict["loss"].mean()
+            loss = loss_dict["mse"].mean()
         else:
             y = model_for_eval(x)
             loss = criterion(y, target)
