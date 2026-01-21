@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import torch.nn as nn
 import math
@@ -310,3 +311,22 @@ class Unet(nn.Module):
         x = self.outconv(x)
 
         return x
+
+    def save(self, path: str|Path):
+        """Save model weights and configuration to a single file."""
+        obj = {
+            "model_state": self.state_dict(),
+            "config": self.config,
+        }
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(obj, path)
+
+    @classmethod
+    def load(cls, path: str, map_location="cpu"):
+        """Load WiDiT model and weights from file."""
+        checkpoint = torch.load(path, map_location=map_location)
+        config = checkpoint["config"]
+        model = cls(**config)
+        model.load_state_dict(checkpoint["model_state"])
+        return model

@@ -304,16 +304,8 @@ def train(
                 # Save best
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    checkpoint = {
-                        "model": get_state_dict_for_saving(model),
-                        "ema": get_state_dict_for_saving(ema),
-                        "opt": opt.state_dict(),
-                        "epoch": epoch,
-                        "step": train_steps,
-                        "val_loss": val_loss,
-                    }
                     best_path = f"{checkpoint_dir}/best.pt"
-                    torch.save(checkpoint, best_path)
+                    ema.save(best_path)
                     logger.info(f"New best checkpoint (val_loss={val_loss:.4f}) saved to {best_path}")
 
                     if wandb_logging and wandb is not None and wandb_log_artifacts:
