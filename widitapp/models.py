@@ -141,6 +141,18 @@ class Unet(nn.Module):
     ):
         super().__init__()
 
+        # Store config to be able to recreate model later
+        self.config = dict(
+            in_channels=in_channels,
+            filters=filters,
+            kernel_size=kernel_size,
+            layers=layers,
+            spatial_dims=spatial_dims,
+            out_channels=out_channels,
+            use_conditioning=use_conditioning,
+            timestep_embed_dim=timestep_embed_dim,
+        )
+
         assert spatial_dims in (2, 3), "spatial_dims must be 2 or 3"
         assert layers > 0, "Layers must be positive"
 
