@@ -69,10 +69,10 @@ def _run_validation_loop(
     rng = torch.Generator(device=device).manual_seed(timestep_seed)
 
     for batch in track(dataloader, total=len(dataloader), description="Validation:"):
-        # Expect (x, target)
-        if not isinstance(batch, (list, tuple)) or len(batch) != 2:
-            raise ValueError("Validation dataloader must return (x, target).")
+        if not isinstance(batch, (list, tuple)) or len(batch) not in {2, 3}:
+            raise ValueError("Validation dataloader must return (x, target) or (x, target, timestep).")
         x, target = batch[0], batch[1]
+        timestep = batch[2] - 1 if len(batch) == 3 else None
 
         x = x.to(device=device, dtype=dtype, non_blocking=True)
         target = target.to(device=device, dtype=dtype, non_blocking=True)
@@ -101,7 +101,7 @@ def _run_validation_loop(
             )
             loss = loss_dict["mse"].mean()
         else:
-            y = model_for_eval(x)
+            y = model_for_eval(x, timestep=timestep)
             loss = criterion(y, target)
 
         loss = accelerator.reduce(loss, reduction="mean")
@@ -225,9 +225,10 @@ def train(
 
         for batch in track(training_dataloader, total=len(training_dataloader), description="Training:"):
             # Expect (x, target)
-            if not isinstance(batch, (list, tuple)) or len(batch) != 2:
-                raise ValueError("Training dataloader must return (x, target).")
+            if not isinstance(batch, (list, tuple)) or len(batch) not in {2, 3}:
+                raise ValueError("Training dataloader must return (x, target) or (x, target, timestep).")
             x, target = batch[0], batch[1]
+            timestep = batch[2] - 1 if len(batch) == 3 else None
 
             x = x.to(device=accelerator.device, dtype=train_dtype, non_blocking=True)
             target = target.to(device=accelerator.device, dtype=train_dtype, non_blocking=True)
@@ -239,7 +240,7 @@ def train(
                     loss_dict = diffusion.training_losses(model, target, timestep, dict(conditioned=x))
                     loss = loss_dict["loss"].mean()
                 else:
-                    y = model(x)
+                    y = model(x, timestep=timestep)
                     loss = criterion(y, target)
 
             opt.zero_grad(set_to_none=True)
