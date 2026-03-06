@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from widitapp import WiDiTApp
@@ -40,3 +41,30 @@ def test_app_model_builds_unet():
 
     assert isinstance(model, Unet)
     assert model.spatial_dim == 2
+
+
+# def test_app_train_requires_cuda(monkeypatch):
+#     app = WiDiTApp()
+
+#     def _no_cuda():
+#         return False
+
+#     monkeypatch.setattr(torch.cuda, "is_available", _no_cuda)
+
+#     with pytest.raises(AssertionError, match="requires at least one GPU"):
+#         app.train(
+#             epochs=1,
+#             use_diffusion=False,
+#             dim=2,
+#             input_size=16,
+#             in_channels=1,
+#             hidden_size=64,
+#             depth=1,
+#             num_heads=4,
+#             patch_size=2,
+#             window_size=4,
+#             mlp_ratio=2.0,
+#             use_flash_attention=False,
+#             batch_size=1,
+#             num_workers=0,
+#         )
