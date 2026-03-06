@@ -1,0 +1,5 @@
+[run]
+source = widitapp
+
+[report]
+precision = 2
