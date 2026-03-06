@@ -7,60 +7,61 @@ class WiDiTApp(Cluey):
     @method
     def model(
         self,
-        dim:int=2,
-        input_size: int = 100,
-        dino:bool=False,
-        unet:bool=False,
+        dim: int = 2,
+        input_size: int | Sequence[int] | None = 100,
+        unet: bool = False,
         in_channels: int = 1,
-        use_diffusion: bool = True,   
-        verbose:bool=False,
+        out_channels: int | None = None,
+        use_diffusion: bool = True,
+        use_conditioning: bool | None = None,
+        verbose: bool = False,
         preset: str = "",
         hidden_size: int = 768,
         depth: int = 12,
         num_heads: int = 12,
-        patch_size: int = 2,
-        window_size: int = 4,
+        patch_size: int | Sequence[int] = 2,
+        window_size: int | Sequence[int] = 4,
         mlp_ratio: float = 4.0,
-        filters:int = 64,
-        kernel:int=3,
-        layers:int=4,
-        dino_size: str = "base",
-        dino_stem_stride: int = 1,
-        dino_num_stages: int = 2,
-        dino_freeze: bool = False,
-        use_flash_attention: bool=True,
+        filters: int = 64,
+        kernel: int = 3,
+        kernel_size: int | Sequence[int] | None = None,
+        layers: int = 4,
+        use_flash_attention: bool = True,
+        timestep_embed_dim: int | None = None,
         **kwargs,
     ):
-        if dino:
-            from .dino import convnext_unet
+        if "spatial_dim" in kwargs:
+            dim = kwargs.pop("spatial_dim")
+        if "spatial_dims" in kwargs:
+            dim = kwargs.pop("spatial_dims")
 
-            return convnext_unet(
-                size=dino_size,
-                in_channels=in_channels,
-                out_channels=1+int(use_diffusion),
-                stem_stride=dino_stem_stride,
-                num_stages=dino_num_stages,
-                use_conditioning=use_diffusion,
-                freeze=dino_freeze,
-            )
-        
+        if use_conditioning is None:
+            use_conditioning = use_diffusion
+
+        if out_channels is None:
+            out_channels = 1 + int(use_diffusion)
+
+        if kernel_size is None:
+            kernel_size = kernel
+
         if unet:
-            from .models import Unet
+            from widit import Unet
 
             return Unet(
                 in_channels=in_channels,
-                out_channels=1+int(use_diffusion),
+                out_channels=out_channels,
                 filters=filters,
-                kernel_size=kernel,
+                kernel_size=kernel_size,
                 layers=layers,
-                spatial_dims=dim,
-                use_conditioning=use_diffusion,
+                spatial_dim=dim,
+                use_conditioning=use_conditioning,
+                timestep_embed_dim=timestep_embed_dim,
             )
 
         from widit import WiDiT, PRESETS
 
-        model_kwargs = dict()
-        
+        model_kwargs: dict = {}
+
         if preset:
             assert preset in PRESETS, f"Model '{preset}' not in PRESETS: {list(PRESETS.keys())}"
             instantiator = PRESETS[preset]
@@ -77,11 +78,12 @@ class WiDiTApp(Cluey):
         model = instantiator(
             input_size=input_size,
             in_channels=in_channels,
-            out_channels=1+int(use_diffusion),
-            use_conditioning=use_diffusion,
+            out_channels=out_channels,
+            use_conditioning=use_conditioning,
             window_size=window_size,
             mlp_ratio=mlp_ratio,
             use_flash_attention=use_flash_attention,
+            timestep_embed_dim=timestep_embed_dim,
             **model_kwargs
         )
 
