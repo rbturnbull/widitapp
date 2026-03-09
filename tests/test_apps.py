@@ -9,7 +9,6 @@ def test_app_model_builds():
 
     model = app.model(
         dim=2,
-        input_size=32,
         in_channels=1,
         use_diffusion=False,
         hidden_size=64,
@@ -56,7 +55,6 @@ def test_app_model_builds_unet():
 #             epochs=1,
 #             use_diffusion=False,
 #             dim=2,
-#             input_size=16,
 #             in_channels=1,
 #             hidden_size=64,
 #             depth=1,

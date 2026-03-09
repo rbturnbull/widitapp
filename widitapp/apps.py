@@ -8,7 +8,6 @@ class WiDiTApp(Cluey):
     def model(
         self,
         dim: int = 2,
-        input_size: int = 100,
         unet: bool = False,
         in_channels: int = 1,
         out_channels: int = None,
@@ -76,7 +75,6 @@ class WiDiTApp(Cluey):
             )
 
         model = instantiator(
-            input_size=input_size,
             in_channels=in_channels,
             out_channels=out_channels,
             use_conditioning=use_conditioning,
