@@ -91,7 +91,9 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
         )
     else:
         raise NotImplementedError(beta_schedule)
-    assert betas.shape == (num_diffusion_timesteps,)
+    assert betas.shape == (num_diffusion_timesteps,), (
+        f"betas.shape must be ({num_diffusion_timesteps},), got {betas.shape}"
+    )
     return betas
 
 
@@ -166,8 +168,11 @@ class GaussianDiffusion:
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
         self.betas = betas
-        assert len(betas.shape) == 1, "betas must be 1-D"
-        assert (betas > 0).all() and (betas <= 1).all()
+        assert len(betas.shape) == 1, f"betas must be 1-D, got shape {betas.shape}"
+        assert (betas > 0).all() and (betas <= 1).all(), (
+            "betas must be in (0, 1]; "
+            f"min={betas.min()} max={betas.max()}"
+        )
 
         self.num_timesteps = int(betas.shape[0])
 
@@ -175,7 +180,10 @@ class GaussianDiffusion:
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
-        assert self.alphas_cumprod_prev.shape == (self.num_timesteps,)
+        assert self.alphas_cumprod_prev.shape == (self.num_timesteps,), (
+            f"alphas_cumprod_prev shape must be ({self.num_timesteps},), "
+            f"got {self.alphas_cumprod_prev.shape}"
+        )
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
         self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod)
@@ -223,7 +231,9 @@ class GaussianDiffusion:
         """
         if noise is None:
             noise = th.randn_like(x_start)
-        assert noise.shape == x_start.shape
+        assert noise.shape == x_start.shape, (
+            f"noise shape {noise.shape} must match x_start shape {x_start.shape}"
+        )
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
@@ -234,7 +244,9 @@ class GaussianDiffusion:
         Compute the mean and variance of the diffusion posterior:
             q(x_{t-1} | x_t, x_0)
         """
-        assert x_start.shape == x_t.shape
+        assert x_start.shape == x_t.shape, (
+            f"x_start shape {x_start.shape} must match x_t shape {x_t.shape}"
+        )
         posterior_mean = (
             _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape) * x_start
             + _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) * x_t
@@ -248,6 +260,12 @@ class GaussianDiffusion:
             == posterior_variance.shape[0]
             == posterior_log_variance_clipped.shape[0]
             == x_start.shape[0]
+        ), (
+            "posterior batch size mismatch: "
+            f"mean={posterior_mean.shape[0]} "
+            f"var={posterior_variance.shape[0]} "
+            f"logvar={posterior_log_variance_clipped.shape[0]} "
+            f"x_start={x_start.shape[0]}"
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
@@ -275,7 +293,7 @@ class GaussianDiffusion:
             model_kwargs = {}
 
         B, C = x.shape[:2]
-        assert t.shape == (B,)
+        assert t.shape == (B,), f"t shape must be ({B},), got {t.shape}"
         model_output = model(x, t, **model_kwargs)
         if isinstance(model_output, tuple):
             model_output, extra = model_output
@@ -283,7 +301,10 @@ class GaussianDiffusion:
             extra = None
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
-            assert model_output.shape == (B, C * 2, *x.shape[2:])
+            assert model_output.shape == (B, C * 2, *x.shape[2:]), (
+                f"model_output shape must be {(B, C * 2, *x.shape[2:])}, "
+                f"got {model_output.shape}"
+            )
             model_output, model_var_values = th.split(model_output, C, dim=1)
             min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
             max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
@@ -322,7 +343,13 @@ class GaussianDiffusion:
             )
         model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
 
-        assert model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
+        assert model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape, (
+            "shape mismatch in p_mean_variance: "
+            f"model_mean={model_mean.shape} "
+            f"log_variance={model_log_variance.shape} "
+            f"pred_xstart={pred_xstart.shape} "
+            f"x={x.shape}"
+        )
         return {
             "mean": model_mean,
             "variance": model_variance,
@@ -332,7 +359,9 @@ class GaussianDiffusion:
         }
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
-        assert x_t.shape == eps.shape
+        assert x_t.shape == eps.shape, (
+            f"x_t shape {x_t.shape} must match eps shape {eps.shape}"
+        )
         return (
             _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
             - _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
@@ -482,7 +511,9 @@ class GaussianDiffusion:
         """
         if device is None:
             device = next(model.parameters()).device
-        assert isinstance(shape, (tuple, list))
+        assert isinstance(shape, (tuple, list)), (
+            f"shape must be tuple or list, got {type(shape)}"
+        )
         if noise is not None:
             img = noise
         else:
@@ -573,7 +604,7 @@ class GaussianDiffusion:
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
         """
-        assert eta == 0.0, "Reverse ODE only for deterministic path"
+        assert eta == 0.0, f"Reverse ODE only for deterministic path, got eta={eta}"
         out = self.p_mean_variance(
             model,
             x,
@@ -650,7 +681,9 @@ class GaussianDiffusion:
         """
         if device is None:
             device = next(model.parameters()).device
-        assert isinstance(shape, (tuple, list))
+        assert isinstance(shape, (tuple, list)), (
+            f"shape must be tuple or list, got {type(shape)}"
+        )
         if noise is not None:
             img = noise
         else:
@@ -704,7 +737,9 @@ class GaussianDiffusion:
         decoder_nll = -discretized_gaussian_log_likelihood(
             x_start, means=out["mean"], log_scales=0.5 * out["log_variance"]
         )
-        assert decoder_nll.shape == x_start.shape
+        assert decoder_nll.shape == x_start.shape, (
+            f"decoder_nll shape {decoder_nll.shape} must match x_start shape {x_start.shape}"
+        )
         decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
 
         # At the first timestep return the decoder NLL,
@@ -751,7 +786,10 @@ class GaussianDiffusion:
                 ModelVarType.LEARNED_RANGE,
             ]:
                 B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
+                assert model_output.shape == (B, C * 2, *x_t.shape[2:]), (
+                    f"model_output shape must be {(B, C * 2, *x_t.shape[2:])}, "
+                    f"got {model_output.shape}"
+                )
                 model_output, model_var_values = th.split(model_output, C, dim=1)
                 # Learn the variance using the variational bound, but don't let
                 # it affect our mean prediction.
@@ -775,7 +813,12 @@ class GaussianDiffusion:
                 ModelMeanType.START_X: x_start,
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
-            assert model_output.shape == target.shape == x_start.shape
+            assert model_output.shape == target.shape == x_start.shape, (
+                "shape mismatch in training_losses: "
+                f"model_output={model_output.shape} "
+                f"target={target.shape} "
+                f"x_start={x_start.shape}"
+            )
             terms["mse"] = mean_flat((target - model_output) ** 2)
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
