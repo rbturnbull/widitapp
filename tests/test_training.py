@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from widitapp.training import (
     _run_validation_loop,
     build_loss_fn,
+    build_val_log_payload,
     create_logger,
     get_state_dict_for_saving,
     requires_grad,
@@ -114,3 +115,31 @@ def test_run_validation_loop_rejects_bad_batch():
         assert False, "Expected ValueError for invalid batch format"
     except ValueError:
         pass
+
+
+def test_build_val_log_payload_accepts_float():
+    val_loss_value, payload = build_val_log_payload(
+        1.25,
+        use_diffusion=False,
+        epoch=3,
+        train_steps=10,
+    )
+    assert val_loss_value == 1.25
+    assert payload["val/loss"] == 1.25
+    assert payload["epoch"] == 3
+    assert payload["global_step"] == 10
+    assert "val/mse" not in payload
+    assert "val/smoothl1" not in payload
+
+
+def test_build_val_log_payload_accepts_dict():
+    val_loss_value, payload = build_val_log_payload(
+        {"loss": 0.5, "mse": 0.6, "smoothl1": 0.4},
+        use_diffusion=False,
+        epoch=1,
+        train_steps=5,
+    )
+    assert val_loss_value == 0.5
+    assert payload["val/loss"] == 0.5
+    assert payload["val/mse"] == 0.6
+    assert payload["val/smoothl1"] == 0.4

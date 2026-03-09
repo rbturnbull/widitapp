@@ -49,6 +49,21 @@ def build_loss_fn(loss_fn: str | torch.nn.Module):
     raise ValueError(f"Unknown loss_fn '{loss_fn}'. Expected 'mse' or 'smoothl1'.")
 
 
+def build_val_log_payload(
+    val_loss: float | Dict[str, float],
+    *,
+    use_diffusion: bool,
+    epoch: int,
+    train_steps: int,
+) -> tuple[float, Dict[str, float]]:
+    val_loss_value = val_loss.get("loss", float("nan")) if isinstance(val_loss, dict) else val_loss
+    payload = {"val/loss": val_loss_value, "epoch": epoch, "global_step": train_steps}
+    if isinstance(val_loss, dict) and not use_diffusion:
+        payload["val/mse"] = val_loss.get("mse", float("nan"))
+        payload["val/smoothl1"] = val_loss.get("smoothl1", float("nan"))
+    return val_loss_value, payload
+
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     ema_params = OrderedDict(ema_model.named_parameters())
@@ -328,21 +343,23 @@ def train(
                 extra_criteria=(None if use_diffusion else extra_val_criteria),
                 timestep_seed=0,  # deterministic validation timesteps
             )
+            val_loss_value, log_payload = build_val_log_payload(
+                val_loss,
+                use_diffusion=use_diffusion,
+                epoch=epoch,
+                train_steps=train_steps,
+            )
             if accelerator.is_main_process:
-                logger.info(f"(epoch={epoch:03d}) val/loss={val_loss['loss']:.4f}")
+                logger.info(f"(epoch={epoch:03d}) val/loss={val_loss_value:.4f}")
                 if wandb_logging and wandb is not None:
-                    log_payload = {"val/loss": val_loss["loss"], "epoch": epoch, "global_step": train_steps}
-                    if not use_diffusion:
-                        log_payload["val/mse"] = val_loss["mse"]
-                        log_payload["val/smoothl1"] = val_loss["smoothl1"]
                     wandb.log(log_payload, step=train_steps)
 
                 # Save best
-                if val_loss["loss"] < best_val_loss:
-                    best_val_loss = val_loss["loss"]
+                if val_loss_value < best_val_loss:
+                    best_val_loss = val_loss_value
                     best_path = f"{checkpoint_dir}/best.pt"
                     ema.save(best_path)
-                    logger.info(f"New best checkpoint (val_loss={val_loss:.4f}) saved to {best_path}")
+                    logger.info(f"New best checkpoint (val_loss={val_loss_value:.4f}) saved to {best_path}")
 
                     if wandb_logging and wandb is not None and wandb_log_artifacts:
                         art = wandb.Artifact(f"{model_string_name}-best", type="model")
