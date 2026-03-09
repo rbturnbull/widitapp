@@ -38,6 +38,17 @@ def get_state_dict_for_saving(model):
     return model.module.state_dict() if hasattr(model, "module") else model.state_dict()
 
 
+def build_loss_fn(loss_fn: str | torch.nn.Module):
+    if isinstance(loss_fn, torch.nn.Module):
+        return loss_fn
+    name = loss_fn.lower()
+    if name in {"mse", "l2"}:
+        return torch.nn.MSELoss(reduction="mean")
+    if name in {"smoothl1", "huber"}:
+        return torch.nn.SmoothL1Loss(reduction="mean")
+    raise ValueError(f"Unknown loss_fn '{loss_fn}'. Expected 'mse' or 'smoothl1'.")
+
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     ema_params = OrderedDict(ema_model.named_parameters())
@@ -61,11 +72,13 @@ def _run_validation_loop(
     device: torch.device,
     dtype: torch.dtype,
     use_diffusion: bool,
-    criterion = torch.nn.SmoothL1Loss(reduction="mean"),
+    criterion: torch.nn.Module,
+    extra_criteria: Dict[str, torch.nn.Module] | None = None,
     timestep_seed: int = 42,
-) -> float:
+) -> Dict[str, float]:
     model_for_eval.eval()
     total_loss, total_batches = 0.0, 0
+    extra_totals = {name: 0.0 for name in (extra_criteria or {})}
     rng = torch.Generator(device=device).manual_seed(timestep_seed)
 
     for batch in track(dataloader, total=len(dataloader), description="Validation:"):
@@ -103,12 +116,23 @@ def _run_validation_loop(
         else:
             y = model_for_eval(x, timestep=timestep)
             loss = criterion(y, target)
+            if extra_criteria:
+                for name, extra in extra_criteria.items():
+                    extra_loss = extra(y, target)
+                    extra_loss = accelerator.reduce(extra_loss, reduction="mean")
+                    extra_totals[name] += extra_loss.item()
 
         loss = accelerator.reduce(loss, reduction="mean")
         total_loss += loss.item()
         total_batches += 1
 
-    return (total_loss / max(total_batches, 1)) if total_batches > 0 else float("nan")
+    if total_batches <= 0:
+        return {"loss": float("nan")}
+
+    result = {"loss": total_loss / total_batches}
+    for name, total in extra_totals.items():
+        result[name] = total / total_batches
+    return result
 
 
 def train(
@@ -119,7 +143,7 @@ def train(
     epochs: int = 40,
     log_every: int = 10,
     use_diffusion: bool = True,
-    criterion = torch.nn.MSELoss(reduction="mean"),
+    loss_fn: str | torch.nn.Module = "mse",
     precision: str = "fp16",
     wandb_logging: bool = False,
     wandb_project: str = "WiDiT",
@@ -165,6 +189,7 @@ def train(
                 "use_diffusion": use_diffusion,
                 "epochs": epochs,
                 "log_every": log_every,
+                "loss_fn": loss_fn if isinstance(loss_fn, str) else loss_fn.__class__.__name__,
                 "optimizer": "AdamW",
                 "lr": 1e-4,
                 "weight_decay": 0.0,
@@ -180,6 +205,12 @@ def train(
 
     if accelerator.is_main_process:
         logger.info(f"Training with precision={precision} (dtype={train_dtype}) on {device}")
+
+    criterion = build_loss_fn(loss_fn)
+    extra_val_criteria = {
+        "mse": torch.nn.MSELoss(reduction="mean"),
+        "smoothl1": torch.nn.SmoothL1Loss(reduction="mean"),
+    }
 
     # ---- models ----
     model = model.to(device)
@@ -294,16 +325,21 @@ def train(
                 dtype=train_dtype,
                 use_diffusion=use_diffusion,
                 criterion=criterion,
+                extra_criteria=(None if use_diffusion else extra_val_criteria),
                 timestep_seed=0,  # deterministic validation timesteps
             )
             if accelerator.is_main_process:
-                logger.info(f"(epoch={epoch:03d}) val/loss={val_loss:.4f}")
+                logger.info(f"(epoch={epoch:03d}) val/loss={val_loss['loss']:.4f}")
                 if wandb_logging and wandb is not None:
-                    wandb.log({"val/loss": val_loss, "epoch": epoch, "global_step": train_steps}, step=train_steps)
+                    log_payload = {"val/loss": val_loss["loss"], "epoch": epoch, "global_step": train_steps}
+                    if not use_diffusion:
+                        log_payload["val/mse"] = val_loss["mse"]
+                        log_payload["val/smoothl1"] = val_loss["smoothl1"]
+                    wandb.log(log_payload, step=train_steps)
 
                 # Save best
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
+                if val_loss["loss"] < best_val_loss:
+                    best_val_loss = val_loss["loss"]
                     best_path = f"{checkpoint_dir}/best.pt"
                     ema.save(best_path)
                     logger.info(f"New best checkpoint (val_loss={val_loss:.4f}) saved to {best_path}")

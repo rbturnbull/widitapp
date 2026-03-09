@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from widitapp.training import (
     _run_validation_loop,
+    build_loss_fn,
     create_logger,
     get_state_dict_for_saving,
     requires_grad,
@@ -81,9 +82,10 @@ def test_run_validation_loop_supervised_zero_loss():
         device=accelerator.device,
         dtype=torch.float32,
         use_diffusion=False,
+        criterion=build_loss_fn("mse"),
     )
 
-    assert loss == 0.0
+    assert loss["loss"] == 0.0
 
 
 def test_run_validation_loop_rejects_bad_batch():
@@ -107,6 +109,7 @@ def test_run_validation_loop_rejects_bad_batch():
             device=accelerator.device,
             dtype=torch.float32,
             use_diffusion=False,
+            criterion=build_loss_fn("mse"),
         )
         assert False, "Expected ValueError for invalid batch format"
     except ValueError:
