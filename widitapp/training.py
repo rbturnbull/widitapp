@@ -268,7 +268,7 @@ def train(
             logger.info(f"Epoch {epoch}...")
 
         model.train()
-
+        len_training_dataloader = len(training_dataloader)
         for batch in track(training_dataloader, total=len(training_dataloader), description="Training:"):
             # Expect (x, target)
             if not isinstance(batch, (list, tuple)) or len(batch) not in {2, 3}:
@@ -310,7 +310,7 @@ def train(
 
                 if accelerator.is_main_process:
                     logger.info(
-                        f"(epoch={epoch:03d}, step={train_steps:07d}) "
+                        f"(epoch={epoch:03d}, step={train_steps:07d}/{len_training_dataloader}, {train_steps/len_training_dataloader*100:.1f}%) "
                         f"train/loss={avg_loss_val:.4f}  speed={steps_per_sec:.2f} steps/s"
                     )
                     if wandb_logging and wandb is not None:
