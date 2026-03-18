@@ -7,6 +7,7 @@ class WiDiTApp(Cluey):
     @method
     def model(
         self,
+        checkpoint: Path = None,
         dim: int = 2,
         unet: bool = False,
         in_channels: int = 1,
@@ -42,6 +43,16 @@ class WiDiTApp(Cluey):
 
         if kernel_size is None:
             kernel_size = kernel
+
+        # If a checkpoint is provided, load the model from the checkpoint instead of building a new one
+        if checkpoint is not None:
+            from widit import load_model
+
+            model = load_model(checkpoint)
+
+            # TODO: Add some checks to make sure the loaded model is compatible with the provided parameters (e.g. in_channels, out_channels, etc.)
+
+            return model
 
         if unet:
             from widit import Unet
