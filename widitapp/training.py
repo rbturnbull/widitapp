@@ -163,6 +163,7 @@ def train(
     wandb_logging: bool = False,
     wandb_project: str = "WiDiT",
     run_name: str|None = None,
+    learning_rate: float = 1e-4,
     wandb_config: Optional[Dict] = None,
     wandb_log_artifacts: bool = False,
 ):
@@ -206,7 +207,7 @@ def train(
                 "log_every": log_every,
                 "loss_fn": loss_fn if isinstance(loss_fn, str) else loss_fn.__class__.__name__,
                 "optimizer": "AdamW",
-                "lr": 1e-4,
+                "lr": learning_rate,
                 "weight_decay": 0.0,
                 "model": model.__class__.__name__,
                 "params": sum(p.numel() for p in model.parameters()),
@@ -240,7 +241,7 @@ def train(
         logger.info(f"Training mode: {'diffusion' if use_diffusion else 'supervised (no diffusion)'}")
 
     # ---- optimizer ----
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.0)
+    opt = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
 
     if accelerator.is_main_process:
         logger.info(f"Training dataloader: {len(training_dataloader):,} batches/epoch")
