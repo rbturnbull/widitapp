@@ -10,6 +10,7 @@ from widitapp.training import (
     create_logger,
     get_state_dict_for_saving,
     is_loss_finite,
+    is_finite_tensor,
     loss_value_for_logging,
     requires_grad,
     update_ema,
@@ -167,3 +168,21 @@ def test_is_loss_finite_rejects_nan_loss():
 
 def test_loss_value_for_logging_returns_scalar_value():
     assert loss_value_for_logging(torch.tensor(1.25)) == 1.25
+
+
+def test_is_finite_tensor_accepts_finite_tensor():
+    accelerator = Accelerator(mixed_precision="no")
+
+    assert is_finite_tensor(
+        torch.tensor([1.0, 2.0], device=accelerator.device),
+        accelerator,
+    )
+
+
+def test_is_finite_tensor_rejects_nan_tensor():
+    accelerator = Accelerator(mixed_precision="no")
+
+    assert not is_finite_tensor(
+        torch.tensor([1.0, float("nan")], device=accelerator.device),
+        accelerator,
+    )

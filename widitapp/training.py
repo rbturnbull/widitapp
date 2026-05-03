@@ -76,6 +76,14 @@ def loss_value_for_logging(loss: torch.Tensor) -> float:
     return loss.detach().item() if loss.detach().numel() == 1 else float("nan")
 
 
+def is_finite_tensor(
+    tensor: torch.Tensor,
+    accelerator: Accelerator,
+) -> bool:
+    local_is_finite = torch.isfinite(tensor.detach()).all().to(device=accelerator.device, dtype=torch.float32)
+    return accelerator.reduce(local_is_finite, reduction="mean").item() == 1.0
+
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     ema_params = OrderedDict(ema_model.named_parameters())
@@ -291,6 +299,17 @@ def train(
 
             x = x.to(device=accelerator.device, dtype=train_dtype, non_blocking=True)
             target = target.to(device=accelerator.device, dtype=train_dtype, non_blocking=True)
+
+            x_is_finite = is_finite_tensor(x, accelerator)
+            target_is_finite = is_finite_tensor(target, accelerator)
+            if not x_is_finite or not target_is_finite:
+                opt.zero_grad(set_to_none=True)
+                if accelerator.is_main_process:
+                    logger.warning(
+                        f"Skipping non-finite training batch at epoch={epoch}, step={train_steps + 1}: "
+                        f"x_is_finite={x_is_finite}, target_is_finite={target_is_finite}"
+                    )
+                continue
 
             with accelerator.autocast():
                 if use_diffusion:
