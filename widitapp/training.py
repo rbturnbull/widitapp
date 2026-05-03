@@ -64,6 +64,18 @@ def build_val_log_payload(
     return val_loss_value, payload
 
 
+def is_loss_finite(
+    loss: torch.Tensor,
+    accelerator: Accelerator,
+) -> bool:
+    local_is_finite = torch.isfinite(loss.detach()).all().to(device=accelerator.device, dtype=torch.float32)
+    return accelerator.reduce(local_is_finite, reduction="mean").item() == 1.0
+
+
+def loss_value_for_logging(loss: torch.Tensor) -> float:
+    return loss.detach().item() if loss.detach().numel() == 1 else float("nan")
+
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     ema_params = OrderedDict(ema_model.named_parameters())
@@ -289,6 +301,15 @@ def train(
                 else:
                     y = model(x, timestep=timestep)
                     loss = criterion(y, target)
+
+            if not is_loss_finite(loss, accelerator):
+                opt.zero_grad(set_to_none=True)
+                if accelerator.is_main_process:
+                    logger.warning(
+                        f"Skipping non-finite training loss at epoch={epoch}, step={train_steps + 1}: "
+                        f"loss={loss_value_for_logging(loss)}"
+                    )
+                continue
 
             opt.zero_grad(set_to_none=True)
             accelerator.backward(loss)

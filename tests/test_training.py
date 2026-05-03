@@ -9,6 +9,8 @@ from widitapp.training import (
     build_val_log_payload,
     create_logger,
     get_state_dict_for_saving,
+    is_loss_finite,
+    loss_value_for_logging,
     requires_grad,
     update_ema,
 )
@@ -143,3 +145,25 @@ def test_build_val_log_payload_accepts_dict():
     assert payload["val/loss"] == 0.5
     assert payload["val/mse"] == 0.6
     assert payload["val/smoothl1"] == 0.4
+
+
+def test_is_loss_finite_accepts_finite_loss():
+    accelerator = Accelerator(mixed_precision="no")
+
+    assert is_loss_finite(
+        torch.tensor(1.0, device=accelerator.device),
+        accelerator,
+    )
+
+
+def test_is_loss_finite_rejects_nan_loss():
+    accelerator = Accelerator(mixed_precision="no")
+
+    assert not is_loss_finite(
+        torch.tensor(float("nan"), device=accelerator.device),
+        accelerator,
+    )
+
+
+def test_loss_value_for_logging_returns_scalar_value():
+    assert loss_value_for_logging(torch.tensor(1.25)) == 1.25

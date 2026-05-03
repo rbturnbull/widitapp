@@ -24,7 +24,6 @@ class WiDiTApp(Cluey):
         mlp_ratio: float = 4.0,
         filters: int = 64,
         kernel: int = 3,
-        kernel_size: int = None,
         layers: int = 4,
         use_flash_attention: bool = True,
         timestep_embed_dim: int = None,
@@ -40,9 +39,6 @@ class WiDiTApp(Cluey):
 
         if out_channels is None:
             out_channels = 1 + int(use_diffusion)
-
-        if kernel_size is None:
-            kernel_size = kernel
 
         # If a checkpoint is provided, load the model from the checkpoint instead of building a new one
         if checkpoint is not None:
@@ -61,7 +57,7 @@ class WiDiTApp(Cluey):
                 in_channels=in_channels,
                 out_channels=out_channels,
                 filters=filters,
-                kernel_size=kernel_size,
+                kernel_size=kernel,
                 layers=layers,
                 spatial_dim=dim,
                 use_conditioning=use_conditioning,
