@@ -52,6 +52,13 @@ def test_app_datasets_is_not_implemented_on_base_class():
         app.datasets()
 
 
+def test_app_predict_is_not_implemented_on_base_class():
+    app = WiDiTApp()
+
+    with pytest.raises(NotImplementedError, match="Prediction not yet implemented"):
+        app.predict()
+
+
 def test_app_dataloaders_builds_loaders_from_datasets():
     app = WiDiTApp()
     training_dataset = TensorDataset(torch.arange(4).float().unsqueeze(1), torch.arange(4).float().unsqueeze(1))
