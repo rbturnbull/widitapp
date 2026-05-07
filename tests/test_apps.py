@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
+from torch.utils.data import TensorDataset
 
 from widitapp import WiDiTApp
 
@@ -42,6 +43,49 @@ def test_app_model_builds_unet():
 
     assert isinstance(model, Unet)
     assert model.spatial_dim == 2
+
+
+def test_app_datasets_is_not_implemented_on_base_class():
+    app = WiDiTApp()
+
+    with pytest.raises(NotImplementedError, match="Datasets method not yet implemented"):
+        app.datasets()
+
+
+def test_app_dataloaders_builds_loaders_from_datasets():
+    app = WiDiTApp()
+    training_dataset = TensorDataset(torch.arange(4).float().unsqueeze(1), torch.arange(4).float().unsqueeze(1))
+    validation_dataset = TensorDataset(torch.arange(2).float().unsqueeze(1), torch.arange(2).float().unsqueeze(1))
+    app.datasets = Mock(return_value=(training_dataset, validation_dataset))
+
+    training_dataloader, validation_dataloader = app.dataloaders(
+        batch_size=2,
+        num_workers=0,
+    )
+
+    app.datasets.assert_called_once_with()
+    assert training_dataloader.dataset is training_dataset
+    assert training_dataloader.batch_size == 2
+    assert training_dataloader.drop_last is False
+    assert training_dataloader.num_workers == 0
+    assert validation_dataloader.dataset is validation_dataset
+    assert validation_dataloader.batch_size == 2
+    assert validation_dataloader.drop_last is False
+    assert validation_dataloader.num_workers == 0
+
+
+def test_app_dataloaders_allows_missing_validation_dataset():
+    app = WiDiTApp()
+    training_dataset = TensorDataset(torch.arange(4).float().unsqueeze(1), torch.arange(4).float().unsqueeze(1))
+    app.datasets = Mock(return_value=(training_dataset, None))
+
+    training_dataloader, validation_dataloader = app.dataloaders(
+        batch_size=2,
+        num_workers=0,
+    )
+
+    assert training_dataloader.dataset is training_dataset
+    assert validation_dataloader is None
 
 
 def test_app_train_builds_model_dataloaders_and_calls_training(tmp_path):

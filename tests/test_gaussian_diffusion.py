@@ -220,6 +220,38 @@ def test_p_mean_variance_rejects_learned_variance_shape_mismatch():
         diffusion.p_mean_variance(ZeroModel(), torch.zeros(1, 1, 2, 2), torch.tensor([0]))
 
 
+def test_p_mean_variance_learned_range_splits_model_output_and_interpolates_variance():
+    diffusion = make_diffusion(
+        model_mean_type=ModelMeanType.START_X,
+        model_var_type=ModelVarType.LEARNED_RANGE,
+    )
+
+    class LearnedRangeModel(torch.nn.Module):
+        def forward(self, x, t):
+            mean = torch.full_like(x, 0.25)
+            var_values = torch.zeros_like(x)
+            return torch.cat([mean, var_values], dim=1)
+
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([1])
+
+    out = diffusion.p_mean_variance(
+        LearnedRangeModel(),
+        x,
+        t,
+        clip_denoised=False,
+    )
+
+    min_log = _extract_into_tensor(diffusion.posterior_log_variance_clipped, t, x.shape)
+    max_log = _extract_into_tensor(np.log(diffusion.betas), t, x.shape)
+    expected_log_variance = 0.5 * max_log + 0.5 * min_log
+
+    assert out["mean"].shape == x.shape
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.25))
+    assert torch.allclose(out["log_variance"], expected_log_variance)
+    assert torch.allclose(out["variance"], torch.exp(expected_log_variance))
+
+
 def test_condition_mean_adds_variance_weighted_gradient():
     diffusion = make_diffusion()
     x = torch.zeros(1, 1, 2, 2)
@@ -379,6 +411,68 @@ def test_training_losses_rescaled_kl_scales_vb_output(monkeypatch):
     terms = diffusion.training_losses(ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([0, 1]))
 
     assert torch.allclose(terms["loss"], torch.tensor([3.0, 6.0]))
+
+
+def test_training_losses_learned_variance_adds_vb_to_mse(monkeypatch):
+    diffusion = make_diffusion(model_var_type=ModelVarType.LEARNED)
+    x_start = torch.zeros(2, 1, 2, 2)
+    noise = torch.full_like(x_start, 0.5)
+
+    class LearnedVarianceModel(torch.nn.Module):
+        def forward(self, x, t, **kwargs):
+            mean = noise
+            var_values = torch.ones_like(x)
+            return torch.cat([mean, var_values], dim=1)
+
+    monkeypatch.setattr(
+        diffusion,
+        "_vb_terms_bpd",
+        lambda **kwargs: {"output": torch.tensor([0.25, 0.75])},
+    )
+
+    terms = diffusion.training_losses(
+        LearnedVarianceModel(),
+        x_start,
+        torch.tensor([0, 1]),
+        noise=noise,
+    )
+
+    assert torch.allclose(terms["mse"], torch.zeros(2))
+    assert torch.allclose(terms["vb"], torch.tensor([0.25, 0.75]))
+    assert torch.allclose(terms["loss"], torch.tensor([0.25, 0.75]))
+
+
+def test_training_losses_learned_range_rescaled_mse_scales_vb(monkeypatch):
+    diffusion = make_diffusion(
+        model_var_type=ModelVarType.LEARNED_RANGE,
+        loss_type=LossType.RESCALED_MSE,
+    )
+    x_start = torch.zeros(2, 1, 2, 2)
+    noise = torch.full_like(x_start, 0.5)
+
+    class LearnedRangeModel(torch.nn.Module):
+        def forward(self, x, t, **kwargs):
+            mean = noise
+            var_values = torch.zeros_like(x)
+            return torch.cat([mean, var_values], dim=1)
+
+    monkeypatch.setattr(
+        diffusion,
+        "_vb_terms_bpd",
+        lambda **kwargs: {"output": torch.tensor([1.0, 2.0])},
+    )
+
+    terms = diffusion.training_losses(
+        LearnedRangeModel(),
+        x_start,
+        torch.tensor([0, 1]),
+        noise=noise,
+    )
+
+    expected_vb = torch.tensor([1.0, 2.0]) * diffusion.num_timesteps / 1000.0
+    assert torch.allclose(terms["mse"], torch.zeros(2))
+    assert torch.allclose(terms["vb"], expected_vb)
+    assert torch.allclose(terms["loss"], expected_vb)
 
 
 def test_prior_bpd_returns_one_value_per_batch_item():
