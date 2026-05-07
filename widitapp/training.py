@@ -84,6 +84,24 @@ def is_finite_tensor(
     return accelerator.reduce(local_is_finite, reduction="mean").item() == 1.0
 
 
+def is_cuda_out_of_memory(error: BaseException) -> bool:
+    out_of_memory_error = getattr(torch, "OutOfMemoryError", None)
+    if out_of_memory_error is not None and isinstance(error, out_of_memory_error):
+        return True
+    message = str(error).lower()
+    return isinstance(error, RuntimeError) and "cuda" in message and "out of memory" in message
+
+
+def tensor_info_for_logging(tensor: torch.Tensor) -> str:
+    return f"shape={tuple(tensor.shape)}, dtype={tensor.dtype}, device={tensor.device}"
+
+
+def clear_after_cuda_oom(optimizer: torch.optim.Optimizer):
+    optimizer.zero_grad(set_to_none=True)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     ema_params = OrderedDict(ema_model.named_parameters())
@@ -311,15 +329,34 @@ def train(
                     )
                 continue
 
-            with accelerator.autocast():
-                if use_diffusion:
-                    timestep = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=accelerator.device)
-                    # Mirror your earlier logic: model(input=target, conditioned=x)
-                    loss_dict = diffusion.training_losses(model, target, timestep, dict(conditioned=x))
-                    loss = loss_dict["loss"].mean()
-                else:
-                    y = model(x, timestep=timestep)
-                    loss = criterion(y, target)
+            local_oom = torch.tensor(0.0, device=accelerator.device)
+            loss = None
+            try:
+                with accelerator.autocast():
+                    if use_diffusion:
+                        timestep = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=accelerator.device)
+                        # Mirror your earlier logic: model(input=target, conditioned=x)
+                        loss_dict = diffusion.training_losses(model, target, timestep, dict(conditioned=x))
+                        loss = loss_dict["loss"].mean()
+                    else:
+                        y = model(x, timestep=timestep)
+                        loss = criterion(y, target)
+            except Exception as error:
+                if not is_cuda_out_of_memory(error):
+                    raise
+                local_oom.fill_(1.0)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            any_oom = accelerator.reduce(local_oom, reduction="sum").item() > 0
+            if any_oom:
+                clear_after_cuda_oom(opt)
+                if accelerator.is_main_process:
+                    logger.warning(
+                        f"Skipping CUDA out-of-memory training batch at epoch={epoch}, step={train_steps + 1}: "
+                        f"x=({tensor_info_for_logging(x)}), target=({tensor_info_for_logging(target)})"
+                    )
+                continue
 
             if not is_loss_finite(loss, accelerator):
                 opt.zero_grad(set_to_none=True)

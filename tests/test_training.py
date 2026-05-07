@@ -9,10 +9,12 @@ from widitapp.training import (
     build_val_log_payload,
     create_logger,
     get_state_dict_for_saving,
+    is_cuda_out_of_memory,
     is_loss_finite,
     is_finite_tensor,
     loss_value_for_logging,
     requires_grad,
+    tensor_info_for_logging,
     update_ema,
 )
 from accelerate import Accelerator
@@ -186,3 +188,27 @@ def test_is_finite_tensor_rejects_nan_tensor():
         torch.tensor([1.0, float("nan")], device=accelerator.device),
         accelerator,
     )
+
+
+def test_is_cuda_out_of_memory_accepts_torch_oom():
+    out_of_memory_error = getattr(torch, "OutOfMemoryError", RuntimeError)
+
+    assert is_cuda_out_of_memory(out_of_memory_error("CUDA out of memory"))
+
+
+def test_is_cuda_out_of_memory_accepts_runtime_cuda_oom():
+    assert is_cuda_out_of_memory(RuntimeError("CUDA out of memory. Tried to allocate 10 MiB."))
+
+
+def test_is_cuda_out_of_memory_rejects_unrelated_runtime_error():
+    assert not is_cuda_out_of_memory(RuntimeError("invalid tensor shape"))
+
+
+def test_tensor_info_for_logging_includes_shape_dtype_and_device():
+    tensor = torch.zeros(2, 3)
+
+    info = tensor_info_for_logging(tensor)
+
+    assert "shape=(2, 3)" in info
+    assert "dtype=torch.float32" in info
+    assert "device=cpu" in info
