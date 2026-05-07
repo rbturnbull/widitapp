@@ -1,3 +1,5 @@
+from unittest.mock import Mock, patch
+
 import pytest
 import torch
 
@@ -40,6 +42,48 @@ def test_app_model_builds_unet():
 
     assert isinstance(model, Unet)
     assert model.spatial_dim == 2
+
+
+def test_app_train_builds_model_dataloaders_and_calls_training(tmp_path):
+    app = WiDiTApp()
+    model = torch.nn.Linear(1, 1)
+    training_dataloader = object()
+    validation_dataloader = object()
+    app.model = Mock(return_value=model)
+    app.dataloaders = Mock(return_value=(training_dataloader, validation_dataloader))
+
+    with patch("widitapp.training.train") as train:
+        app.train(
+            epochs=3,
+            log_every=7,
+            learning_rate=0.01,
+            results_dir=tmp_path,
+            use_diffusion=False,
+            wandb=True,
+            run_name="unit-run",
+            batch_size=4,
+        )
+
+    app.model.assert_called_once_with(
+        use_diffusion=False,
+        batch_size=4,
+    )
+    app.dataloaders.assert_called_once_with(
+        batch_size=4,
+    )
+    train.assert_called_once_with(
+        model=model,
+        training_dataloader=training_dataloader,
+        validation_dataloader=validation_dataloader,
+        results_dir=tmp_path,
+        use_diffusion=False,
+        learning_rate=0.01,
+        epochs=3,
+        log_every=7,
+        run_name="unit-run",
+        wandb_logging=True,
+        wandb_project="WiDiTApp",
+    )
 
 
 # def test_app_train_requires_cuda(monkeypatch):

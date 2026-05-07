@@ -234,6 +234,115 @@ def test_condition_mean_adds_variance_weighted_gradient():
     assert torch.allclose(result, torch.full_like(x, 2.0))
 
 
+def test_condition_score_updates_pred_xstart_and_mean():
+    diffusion = make_diffusion()
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([1])
+    p_mean_var = diffusion.p_mean_variance(ZeroModel(), x, t)
+
+    out = diffusion.condition_score(
+        lambda x, t, scale: torch.full_like(x, scale),
+        p_mean_var,
+        x,
+        t,
+        {"scale": 1.0},
+    )
+
+    assert out is not p_mean_var
+    assert not torch.allclose(out["pred_xstart"], p_mean_var["pred_xstart"])
+    assert not torch.allclose(out["mean"], p_mean_var["mean"])
+    assert torch.equal(out["variance"], p_mean_var["variance"])
+
+
+def test_vb_terms_bpd_returns_output_and_pred_xstart():
+    diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
+
+    class StartModel(torch.nn.Module):
+        def forward(self, x, t, **kwargs):
+            return torch.zeros_like(x)
+
+    x_start = torch.zeros(2, 1, 2, 2)
+    x_t = torch.zeros_like(x_start)
+
+    out = diffusion._vb_terms_bpd(
+        StartModel(),
+        x_start=x_start,
+        x_t=x_t,
+        t=torch.tensor([0, 1]),
+        clip_denoised=False,
+    )
+
+    assert out["output"].shape == (2,)
+    assert out["pred_xstart"].shape == x_start.shape
+    assert torch.isfinite(out["output"]).all()
+
+
+def test_vb_terms_bpd_uses_decoder_nll_at_timestep_zero(monkeypatch):
+    diffusion = make_diffusion()
+    x_start = torch.zeros(2, 1, 2, 2)
+    x_t = torch.zeros_like(x_start)
+
+    def fake_p_mean_variance(*args, **kwargs):
+        return {
+            "mean": torch.zeros_like(x_start),
+            "log_variance": torch.zeros_like(x_start),
+            "pred_xstart": torch.full_like(x_start, 0.25),
+        }
+
+    monkeypatch.setattr(diffusion, "p_mean_variance", fake_p_mean_variance)
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.normal_kl",
+        lambda *args, **kwargs: torch.full_like(x_start, 8.0),
+    )
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.discretized_gaussian_log_likelihood",
+        lambda *args, **kwargs: torch.full_like(x_start, -2.0),
+    )
+
+    out = diffusion._vb_terms_bpd(
+        ZeroModel(),
+        x_start=x_start,
+        x_t=x_t,
+        t=torch.tensor([0, 1]),
+        clip_denoised=False,
+    )
+
+    assert out["output"][0] == pytest.approx(2.0 / math.log(2.0))
+    assert out["output"][1] == pytest.approx(8.0 / math.log(2.0))
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x_start, 0.25))
+
+
+def test_calc_bpd_loop_aggregates_terms_and_prior(monkeypatch):
+    diffusion = make_diffusion()
+    seen_timesteps = []
+    x_start = torch.zeros(2, 1, 2, 2)
+
+    def fake_vb_terms(model, x_start, x_t, t, clip_denoised=True, model_kwargs=None):
+        seen_timesteps.append(t.clone())
+        value = t.float() + 1.0
+        return {
+            "output": value,
+            "pred_xstart": torch.ones_like(x_start) * value.view(-1, 1, 1, 1),
+        }
+
+    monkeypatch.setattr(diffusion, "_vb_terms_bpd", fake_vb_terms)
+    monkeypatch.setattr(diffusion, "_prior_bpd", lambda x_start: torch.tensor([0.5, 1.5]))
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.th.randn_like",
+        lambda tensor: torch.ones_like(tensor),
+    )
+
+    out = diffusion.calc_bpd_loop(ZeroModel(), x_start)
+
+    assert [t[0].item() for t in seen_timesteps] == [2, 1, 0]
+    assert out["vb"].shape == (2, 3)
+    assert out["xstart_mse"].shape == (2, 3)
+    assert out["mse"].shape == (2, 3)
+    assert torch.allclose(out["vb"], torch.tensor([[3.0, 2.0, 1.0], [3.0, 2.0, 1.0]]))
+    assert torch.allclose(out["prior_bpd"], torch.tensor([0.5, 1.5]))
+    assert torch.allclose(out["total_bpd"], torch.tensor([6.5, 7.5]))
+
+
 def test_training_losses_mse_zero_when_model_predicts_noise():
     diffusion = make_diffusion(model_mean_type=ModelMeanType.EPSILON)
     x_start = torch.zeros(2, 1, 2, 2)
@@ -279,3 +388,189 @@ def test_prior_bpd_returns_one_value_per_batch_item():
 
     assert prior.shape == (2,)
     assert torch.isfinite(prior).all()
+
+
+def test_p_sample_uses_mean_without_noise_at_timestep_zero(monkeypatch):
+    diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([0])
+
+    class StartModel(torch.nn.Module):
+        def forward(self, x, t):
+            return torch.full_like(x, 0.5)
+
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.th.randn_like",
+        lambda tensor: torch.full_like(tensor, 100.0),
+    )
+
+    out = diffusion.p_sample(StartModel(), x, t, clip_denoised=False)
+    mean_out = diffusion.p_mean_variance(StartModel(), x, t, clip_denoised=False)
+
+    assert torch.allclose(out["sample"], mean_out["mean"])
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.5))
+
+
+def test_p_sample_applies_condition_mean(monkeypatch):
+    diffusion = make_diffusion()
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([1])
+
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.th.randn_like",
+        lambda tensor: torch.zeros_like(tensor),
+    )
+
+    unconditioned = diffusion.p_sample(ZeroModel(), x, t)
+    conditioned = diffusion.p_sample(
+        ZeroModel(),
+        x,
+        t,
+        cond_fn=lambda x, t, **kwargs: torch.ones_like(x),
+        model_kwargs={},
+    )
+
+    assert torch.all(conditioned["sample"] > unconditioned["sample"])
+
+
+def test_p_sample_loop_progressive_yields_reverse_timestep_order(monkeypatch):
+    diffusion = make_diffusion()
+    seen_timesteps = []
+
+    def fake_p_sample(model, img, t, **kwargs):
+        seen_timesteps.append(t.clone())
+        return {"sample": img + t.float().view(-1, 1, 1, 1), "pred_xstart": img}
+
+    monkeypatch.setattr(diffusion, "p_sample", fake_p_sample)
+
+    outputs = list(
+        diffusion.p_sample_loop_progressive(
+            ZeroModel(),
+            shape=(1, 1, 1, 1),
+            noise=torch.zeros(1, 1, 1, 1),
+            device=torch.device("cpu"),
+        )
+    )
+
+    assert [t.item() for t in seen_timesteps] == [2, 1, 0]
+    assert len(outputs) == diffusion.num_timesteps
+    assert torch.allclose(outputs[-1]["sample"], torch.tensor([[[[3.0]]]]))
+
+
+def test_p_sample_loop_returns_final_progressive_sample(monkeypatch):
+    diffusion = make_diffusion()
+
+    def fake_progressive(*args, **kwargs):
+        yield {"sample": torch.tensor([1.0])}
+        yield {"sample": torch.tensor([2.0])}
+
+    monkeypatch.setattr(diffusion, "p_sample_loop_progressive", fake_progressive)
+
+    sample = diffusion.p_sample_loop(ZeroModel(), shape=(1,))
+
+    assert torch.equal(sample, torch.tensor([2.0]))
+
+
+def test_ddim_sample_returns_pred_xstart_at_timestep_zero_with_eta_zero():
+    diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([0])
+
+    class StartModel(torch.nn.Module):
+        def forward(self, x, t):
+            return torch.full_like(x, 0.25)
+
+    out = diffusion.ddim_sample(StartModel(), x, t, clip_denoised=False, eta=0.0)
+
+    assert torch.allclose(out["sample"], torch.full_like(x, 0.25))
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.25))
+
+
+def test_ddim_sample_applies_condition_score(monkeypatch):
+    diffusion = make_diffusion()
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([0])
+
+    def fake_condition_score(cond_fn, p_mean_var, x, t, model_kwargs=None):
+        out = p_mean_var.copy()
+        out["pred_xstart"] = torch.full_like(x, 0.75)
+        return out
+
+    monkeypatch.setattr(diffusion, "condition_score", fake_condition_score)
+
+    out = diffusion.ddim_sample(
+        ZeroModel(),
+        x,
+        t,
+        cond_fn=lambda x, t, **kwargs: torch.ones_like(x),
+    )
+
+    assert torch.allclose(out["sample"], torch.full_like(x, 0.75))
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.75))
+
+
+def test_ddim_sample_loop_progressive_yields_reverse_timestep_order(monkeypatch):
+    diffusion = make_diffusion()
+    seen_timesteps = []
+
+    def fake_ddim_sample(model, img, t, **kwargs):
+        seen_timesteps.append(t.clone())
+        return {"sample": img + t.float().view(-1, 1, 1, 1), "pred_xstart": img}
+
+    monkeypatch.setattr(diffusion, "ddim_sample", fake_ddim_sample)
+
+    outputs = list(
+        diffusion.ddim_sample_loop_progressive(
+            ZeroModel(),
+            shape=(1, 1, 1, 1),
+            noise=torch.zeros(1, 1, 1, 1),
+            device=torch.device("cpu"),
+            eta=0.5,
+        )
+    )
+
+    assert [t.item() for t in seen_timesteps] == [2, 1, 0]
+    assert len(outputs) == diffusion.num_timesteps
+    assert torch.allclose(outputs[-1]["sample"], torch.tensor([[[[3.0]]]]))
+
+
+def test_ddim_sample_loop_returns_final_progressive_sample(monkeypatch):
+    diffusion = make_diffusion()
+
+    def fake_progressive(*args, **kwargs):
+        yield {"sample": torch.tensor([3.0])}
+        yield {"sample": torch.tensor([4.0])}
+
+    monkeypatch.setattr(diffusion, "ddim_sample_loop_progressive", fake_progressive)
+
+    sample = diffusion.ddim_sample_loop(ZeroModel(), shape=(1,))
+
+    assert torch.equal(sample, torch.tensor([4.0]))
+
+
+def test_ddim_reverse_sample_rejects_nonzero_eta():
+    diffusion = make_diffusion()
+
+    with pytest.raises(AssertionError, match="Reverse ODE only"):
+        diffusion.ddim_reverse_sample(
+            ZeroModel(),
+            torch.zeros(1, 1, 2, 2),
+            torch.tensor([0]),
+            eta=0.1,
+        )
+
+
+def test_ddim_reverse_sample_returns_expected_shapes():
+    diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([0])
+
+    class StartModel(torch.nn.Module):
+        def forward(self, x, t):
+            return torch.full_like(x, 0.5)
+
+    out = diffusion.ddim_reverse_sample(StartModel(), x, t, clip_denoised=False)
+
+    assert out["sample"].shape == x.shape
+    assert out["pred_xstart"].shape == x.shape
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.5))

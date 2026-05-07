@@ -396,6 +396,156 @@ def test_train_validation_saves_best_checkpoint(tmp_path):
     assert "New best checkpoint" in log_text
 
 
+def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path):
+    class DiffusionModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(1.0))
+
+        def forward(self, x, t, conditioned=None):
+            return x * self.weight
+
+    class FakeDiffusion:
+        num_timesteps = 5
+
+        def __init__(self):
+            self.calls = []
+
+        def training_losses(self, model, target, timestep, model_kwargs):
+            self.calls.append((target.detach().clone(), timestep.detach().clone(), model_kwargs))
+            prediction = model(target, timestep, **model_kwargs)
+            return {"loss": (prediction - 0.0).flatten(start_dim=1).mean(dim=1)}
+
+    model = DiffusionModel()
+    diffusion = FakeDiffusion()
+    initial_weight = model.weight.detach().clone()
+    dataloader = DataLoader(
+        TensorDataset(torch.ones(2, 1, 1, 1), torch.ones(2, 1, 1, 1)),
+        batch_size=1,
+    )
+
+    with patch("widitapp.training.create_diffusion", return_value=diffusion) as create_diffusion:
+        run_train_on_cpu(
+            model=model,
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=1,
+            use_diffusion=True,
+            precision="fp32",
+            learning_rate=0.1,
+            run_name="diffusion",
+        )
+
+    create_diffusion.assert_called_once_with(timestep_respacing="")
+    assert len(diffusion.calls) == 2
+    assert all(call[1].shape == (1,) for call in diffusion.calls)
+    assert all("conditioned" in call[2] for call in diffusion.calls)
+    assert not torch.allclose(model.weight, initial_weight)
+    log_text = (tmp_path / "diffusion" / "log.txt").read_text()
+    assert "Training mode: diffusion" in log_text
+    assert "train/loss=" in log_text
+
+
+def test_train_diffusion_skips_non_finite_loss_and_continues(tmp_path):
+    class DiffusionModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(1.0))
+
+        def forward(self, x, t, conditioned=None):
+            return x * self.weight
+
+    class FakeDiffusion:
+        num_timesteps = 5
+
+        def __init__(self):
+            self.calls = 0
+
+        def training_losses(self, model, target, timestep, model_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"loss": target.flatten(start_dim=1).mean(dim=1) * float("nan")}
+            prediction = model(target, timestep, **model_kwargs)
+            return {"loss": prediction.flatten(start_dim=1).mean(dim=1)}
+
+    model = DiffusionModel()
+    diffusion = FakeDiffusion()
+    dataloader = DataLoader(
+        TensorDataset(torch.ones(2, 1, 1, 1), torch.ones(2, 1, 1, 1)),
+        batch_size=1,
+    )
+
+    with patch("widitapp.training.create_diffusion", return_value=diffusion):
+        run_train_on_cpu(
+            model=model,
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=100,
+            use_diffusion=True,
+            precision="fp32",
+            learning_rate=0.1,
+            run_name="diffusion-skip-loss",
+        )
+
+    assert diffusion.calls == 2
+    log_text = (tmp_path / "diffusion-skip-loss" / "log.txt").read_text()
+    assert "Skipping non-finite training loss" in log_text
+
+
+def test_train_diffusion_validation_passes_diffusion_to_validation_loop(tmp_path):
+    class SaveModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(1.0))
+
+        def forward(self, x, t, conditioned=None):
+            return x * self.weight
+
+        def save(self, path):
+            torch.save(self.state_dict(), path)
+
+    class FakeDiffusion:
+        num_timesteps = 5
+
+        def training_losses(self, model, target, timestep, model_kwargs):
+            prediction = model(target, timestep, **model_kwargs)
+            return {"loss": prediction.flatten(start_dim=1).mean(dim=1)}
+
+    diffusion = FakeDiffusion()
+    dataloader = DataLoader(
+        TensorDataset(torch.ones(1, 1, 1, 1), torch.ones(1, 1, 1, 1)),
+        batch_size=1,
+    )
+    validation_dataloader = DataLoader(
+        TensorDataset(torch.ones(1, 1, 1, 1), torch.ones(1, 1, 1, 1)),
+        batch_size=1,
+    )
+
+    with patch("widitapp.training.create_diffusion", return_value=diffusion), patch(
+        "widitapp.training._run_validation_loop", return_value={"loss": 0.2}
+    ) as validation_loop:
+        run_train_on_cpu(
+            model=SaveModel(),
+            training_dataloader=dataloader,
+            validation_dataloader=validation_dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=100,
+            use_diffusion=True,
+            precision="fp32",
+            run_name="diffusion-validation",
+        )
+
+    validation_loop.assert_called_once()
+    _, kwargs = validation_loop.call_args
+    assert kwargs["diffusion"] is diffusion
+    assert kwargs["use_diffusion"] is True
+    assert kwargs["extra_criteria"] is None
+    assert (tmp_path / "diffusion-validation" / "checkpoints" / "best.pt").exists()
+
+
 def test_build_loss_fn_returns_module_instance_unchanged():
     criterion = torch.nn.L1Loss()
 
