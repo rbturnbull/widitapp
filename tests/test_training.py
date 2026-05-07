@@ -292,6 +292,55 @@ def test_train_supervised_updates_model_and_writes_log(tmp_path):
     assert "train/loss=" in log_text
 
 
+def test_train_logs_training_metrics_to_wandb(tmp_path):
+    class LinearWithTimestep(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1, bias=False)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+    model = LinearWithTimestep()
+    dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+    fake_wandb = Mock()
+    fake_wandb.summary = {}
+
+    with patch("widitapp.training.wandb", fake_wandb):
+        run_train_on_cpu(
+            model=model,
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=1,
+            use_diffusion=False,
+            precision="fp32",
+            learning_rate=0.01,
+            run_name="wandb-train",
+            wandb_logging=True,
+            wandb_project="UnitProject",
+            wandb_config={"custom": "value"},
+        )
+
+    fake_wandb.init.assert_called_once()
+    _, init_kwargs = fake_wandb.init.call_args
+    assert init_kwargs["project"] == "UnitProject"
+    assert init_kwargs["name"] == "wandb-train"
+    assert init_kwargs["dir"] == str(tmp_path / "wandb-train")
+    assert init_kwargs["config"]["custom"] == "value"
+    assert init_kwargs["config"]["use_diffusion"] is False
+    assert init_kwargs["config"]["lr"] == 0.01
+    fake_wandb.log.assert_called_once()
+    log_payload, = fake_wandb.log.call_args.args
+    assert "train/loss" in log_payload
+    assert "train/steps_per_sec" in log_payload
+    assert log_payload["epoch"] == 0
+    assert log_payload["global_step"] == 1
+    assert fake_wandb.log.call_args.kwargs["step"] == 1
+    assert fake_wandb.summary["best/val_loss"] == float("inf")
+    fake_wandb.finish.assert_called_once_with()
+
+
 def test_train_skips_non_finite_input_batch_before_forward(tmp_path):
     class CountingModel(torch.nn.Module):
         def __init__(self):
@@ -394,6 +443,60 @@ def test_train_validation_saves_best_checkpoint(tmp_path):
     log_text = (tmp_path / "validation" / "log.txt").read_text()
     assert "val/loss=0.2500" in log_text
     assert "New best checkpoint" in log_text
+
+
+def test_train_logs_validation_and_best_artifact_to_wandb(tmp_path):
+    class SaveModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+        def save(self, path):
+            torch.save(self.state_dict(), path)
+
+    model = SaveModel()
+    training_dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+    validation_dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+    fake_artifact = Mock()
+    fake_wandb = Mock()
+    fake_wandb.summary = {}
+    fake_wandb.Artifact.return_value = fake_artifact
+
+    with patch("widitapp.training.wandb", fake_wandb), patch(
+        "widitapp.training._run_validation_loop",
+        return_value={"loss": 0.25, "mse": 0.5, "smoothl1": 0.125},
+    ):
+        run_train_on_cpu(
+            model=model,
+            training_dataloader=training_dataloader,
+            validation_dataloader=validation_dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=1,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="wandb-validation",
+            wandb_logging=True,
+            wandb_project="UnitProject",
+            wandb_log_artifacts=True,
+        )
+
+    assert fake_wandb.log.call_count == 2
+    train_payload = fake_wandb.log.call_args_list[0].args[0]
+    val_payload = fake_wandb.log.call_args_list[1].args[0]
+    assert "train/loss" in train_payload
+    assert val_payload["val/loss"] == 0.25
+    assert val_payload["val/mse"] == 0.5
+    assert val_payload["val/smoothl1"] == 0.125
+    fake_wandb.Artifact.assert_called_once_with("SaveModel-best", type="model")
+    best_path = tmp_path / "wandb-validation" / "checkpoints" / "best.pt"
+    fake_artifact.add_file.assert_called_once_with(str(best_path))
+    fake_wandb.log_artifact.assert_called_once_with(fake_artifact)
+    assert fake_wandb.summary["best/val_loss"] == 0.25
+    fake_wandb.finish.assert_called_once_with()
 
 
 def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path):

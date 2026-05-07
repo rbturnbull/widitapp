@@ -551,6 +551,65 @@ def test_p_sample_loop_progressive_yields_reverse_timestep_order(monkeypatch):
     assert torch.allclose(outputs[-1]["sample"], torch.tensor([[[[3.0]]]]))
 
 
+def test_p_sample_loop_progressive_uses_model_device_and_random_noise(monkeypatch):
+    diffusion = make_diffusion()
+    model = torch.nn.Linear(1, 1)
+    seen_first_img = []
+
+    def fake_randn(*shape, device=None):
+        assert shape == (1, 1, 1, 1)
+        assert device == torch.device("cpu")
+        return torch.full(shape, 2.0, device=device)
+
+    def fake_p_sample(model, img, t, **kwargs):
+        if not seen_first_img:
+            seen_first_img.append(img.clone())
+        return {"sample": img, "pred_xstart": img}
+
+    monkeypatch.setattr("widitapp.diffusion.gaussian_diffusion.th.randn", fake_randn)
+    monkeypatch.setattr(diffusion, "p_sample", fake_p_sample)
+
+    outputs = list(diffusion.p_sample_loop_progressive(model, shape=(1, 1, 1, 1)))
+
+    assert torch.allclose(seen_first_img[0], torch.full((1, 1, 1, 1), 2.0))
+    assert len(outputs) == diffusion.num_timesteps
+
+
+def test_p_sample_loop_progressive_rejects_non_sequence_shape():
+    diffusion = make_diffusion()
+
+    with pytest.raises(AssertionError, match="shape must be tuple or list"):
+        list(diffusion.p_sample_loop_progressive(ZeroModel(), shape=1, device=torch.device("cpu")))
+
+
+def test_p_sample_loop_progressive_wraps_indices_with_progress(monkeypatch):
+    diffusion = make_diffusion()
+    progress_calls = []
+
+    def fake_tqdm(indices):
+        progress_calls.append(list(indices))
+        return progress_calls[0]
+
+    monkeypatch.setattr("tqdm.auto.tqdm", fake_tqdm)
+    monkeypatch.setattr(
+        diffusion,
+        "p_sample",
+        lambda model, img, t, **kwargs: {"sample": img, "pred_xstart": img},
+    )
+
+    list(
+        diffusion.p_sample_loop_progressive(
+            ZeroModel(),
+            shape=(1, 1, 1, 1),
+            noise=torch.zeros(1, 1, 1, 1),
+            device=torch.device("cpu"),
+            progress=True,
+        )
+    )
+
+    assert progress_calls == [[2, 1, 0]]
+
+
 def test_p_sample_loop_returns_final_progressive_sample(monkeypatch):
     diffusion = make_diffusion()
 
@@ -626,6 +685,65 @@ def test_ddim_sample_loop_progressive_yields_reverse_timestep_order(monkeypatch)
     assert [t.item() for t in seen_timesteps] == [2, 1, 0]
     assert len(outputs) == diffusion.num_timesteps
     assert torch.allclose(outputs[-1]["sample"], torch.tensor([[[[3.0]]]]))
+
+
+def test_ddim_sample_loop_progressive_uses_model_device_and_random_noise(monkeypatch):
+    diffusion = make_diffusion()
+    model = torch.nn.Linear(1, 1)
+    seen_first_img = []
+
+    def fake_randn(*shape, device=None):
+        assert shape == (1, 1, 1, 1)
+        assert device == torch.device("cpu")
+        return torch.full(shape, 3.0, device=device)
+
+    def fake_ddim_sample(model, img, t, **kwargs):
+        if not seen_first_img:
+            seen_first_img.append(img.clone())
+        return {"sample": img, "pred_xstart": img}
+
+    monkeypatch.setattr("widitapp.diffusion.gaussian_diffusion.th.randn", fake_randn)
+    monkeypatch.setattr(diffusion, "ddim_sample", fake_ddim_sample)
+
+    outputs = list(diffusion.ddim_sample_loop_progressive(model, shape=(1, 1, 1, 1)))
+
+    assert torch.allclose(seen_first_img[0], torch.full((1, 1, 1, 1), 3.0))
+    assert len(outputs) == diffusion.num_timesteps
+
+
+def test_ddim_sample_loop_progressive_rejects_non_sequence_shape():
+    diffusion = make_diffusion()
+
+    with pytest.raises(AssertionError, match="shape must be tuple or list"):
+        list(diffusion.ddim_sample_loop_progressive(ZeroModel(), shape=1, device=torch.device("cpu")))
+
+
+def test_ddim_sample_loop_progressive_wraps_indices_with_progress(monkeypatch):
+    diffusion = make_diffusion()
+    progress_calls = []
+
+    def fake_tqdm(indices):
+        progress_calls.append(list(indices))
+        return progress_calls[0]
+
+    monkeypatch.setattr("tqdm.auto.tqdm", fake_tqdm)
+    monkeypatch.setattr(
+        diffusion,
+        "ddim_sample",
+        lambda model, img, t, **kwargs: {"sample": img, "pred_xstart": img},
+    )
+
+    list(
+        diffusion.ddim_sample_loop_progressive(
+            ZeroModel(),
+            shape=(1, 1, 1, 1),
+            noise=torch.zeros(1, 1, 1, 1),
+            device=torch.device("cpu"),
+            progress=True,
+        )
+    )
+
+    assert progress_calls == [[2, 1, 0]]
 
 
 def test_ddim_sample_loop_returns_final_progressive_sample(monkeypatch):
