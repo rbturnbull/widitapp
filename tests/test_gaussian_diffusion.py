@@ -152,6 +152,23 @@ def test_q_sample_uses_provided_noise_deterministically():
     assert torch.allclose(sample, expected)
 
 
+def test_q_sample_uses_random_noise_when_noise_is_none(monkeypatch):
+    diffusion = make_diffusion()
+    x_start = torch.ones(1, 1, 2, 2)
+    noise = torch.full_like(x_start, 3.0)
+    t = torch.tensor([0])
+
+    monkeypatch.setattr(
+        "widitapp.diffusion.gaussian_diffusion.th.randn_like",
+        lambda tensor: noise,
+    )
+
+    sample = diffusion.q_sample(x_start, t)
+
+    expected = math.sqrt(0.9) * x_start + math.sqrt(0.1) * noise
+    assert torch.allclose(sample, expected)
+
+
 def test_q_sample_rejects_noise_shape_mismatch():
     diffusion = make_diffusion()
 
@@ -215,6 +232,23 @@ def test_p_mean_variance_clips_denoised_start_prediction():
             return torch.full_like(x, 5.0)
 
     out = diffusion.p_mean_variance(LargeModel(), torch.zeros(1, 1, 2, 2), torch.tensor([0]))
+
+    assert torch.all(out["pred_xstart"] == 1.0)
+
+
+def test_p_mean_variance_applies_denoised_fn_before_clipping():
+    diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
+
+    class StartModel(torch.nn.Module):
+        def forward(self, x, t):
+            return torch.zeros_like(x)
+
+    out = diffusion.p_mean_variance(
+        StartModel(),
+        torch.zeros(1, 1, 2, 2),
+        torch.tensor([0]),
+        denoised_fn=lambda x: x + 2.0,
+    )
 
     assert torch.all(out["pred_xstart"] == 1.0)
 
@@ -424,6 +458,20 @@ def test_training_losses_rescaled_kl_scales_vb_output(monkeypatch):
     terms = diffusion.training_losses(ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([0, 1]))
 
     assert torch.allclose(terms["loss"], torch.tensor([3.0, 6.0]))
+
+
+def test_training_losses_rejects_unsupported_loss_type():
+    diffusion = make_diffusion()
+    diffusion.loss_type = "unsupported-loss"
+
+    with pytest.raises(NotImplementedError) as error:
+        diffusion.training_losses(
+            ZeroModel(),
+            torch.zeros(1, 1, 2, 2),
+            torch.tensor([0]),
+        )
+
+    assert error.value.args == ("unsupported-loss",)
 
 
 def test_training_losses_learned_variance_adds_vb_to_mse(monkeypatch):

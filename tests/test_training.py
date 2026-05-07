@@ -45,6 +45,12 @@ class FakeAccelerator:
         return torch.autocast(device_type="cpu", enabled=False)
 
 
+class FakeWorkerAccelerator(FakeAccelerator):
+    def __init__(self, mixed_precision="no"):
+        super().__init__(mixed_precision=mixed_precision)
+        self.is_main_process = False
+
+
 class IdentityModel(torch.nn.Module):
     def forward(self, x, timestep=None, **kwargs):
         return x
@@ -276,6 +282,101 @@ def test_train_requires_cuda():
                 training_dataloader=DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1))),
                 use_diffusion=False,
             )
+
+
+def test_train_uses_quiet_logger_for_non_main_process(tmp_path):
+    class LinearWithTimestep(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1, bias=False)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+    dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+    logger = logging.getLogger("train")
+    old_handlers = list(logger.handlers)
+    logger.handlers.clear()
+    try:
+        with patch("widitapp.training.Accelerator", FakeWorkerAccelerator), patch(
+            "torch.cuda.is_available", return_value=True
+        ), patch("torch.cuda.synchronize"), patch("widitapp.training.create_logger") as create_logger:
+            training_module.train(
+                model=LinearWithTimestep(),
+                training_dataloader=dataloader,
+                results_dir=str(tmp_path),
+                epochs=1,
+                log_every=1,
+                use_diffusion=False,
+                precision="fp32",
+                run_name="worker",
+            )
+    finally:
+        logger.handlers.clear()
+        logger.handlers.extend(old_handlers)
+
+    create_logger.assert_not_called()
+    assert not (tmp_path / "worker").exists()
+
+
+def test_train_rejects_non_sequence_batch(tmp_path):
+    class BadBatchDataset(torch.utils.data.Dataset):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            return {"x": torch.ones(1), "target": torch.zeros(1)}
+
+    class LinearWithTimestep(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+    dataloader = DataLoader(BadBatchDataset(), batch_size=1)
+
+    with pytest.raises(ValueError, match="Training dataloader must return"):
+        run_train_on_cpu(
+            model=LinearWithTimestep(),
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="bad-batch-type",
+        )
+
+
+def test_train_rejects_tuple_batch_with_invalid_length(tmp_path):
+    class BadBatchDataset(torch.utils.data.Dataset):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            return torch.ones(1), torch.zeros(1), torch.zeros(1), torch.zeros(1)
+
+    class LinearWithTimestep(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+    dataloader = DataLoader(BadBatchDataset(), batch_size=1)
+
+    with pytest.raises(ValueError, match="Training dataloader must return"):
+        run_train_on_cpu(
+            model=LinearWithTimestep(),
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="bad-batch-length",
+        )
 
 
 def test_train_supervised_updates_model_and_writes_log(tmp_path):
