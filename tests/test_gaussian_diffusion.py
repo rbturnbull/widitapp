@@ -45,6 +45,19 @@ def test_mean_flat_averages_non_batch_dimensions():
     assert torch.allclose(result, torch.tensor([5.5, 17.5]))
 
 
+@pytest.mark.parametrize(
+    ("loss_type", "expected"),
+    [
+        (LossType.KL, True),
+        (LossType.RESCALED_KL, True),
+        (LossType.MSE, False),
+        (LossType.RESCALED_MSE, False),
+    ],
+)
+def test_loss_type_is_vb(loss_type, expected):
+    assert loss_type.is_vb() is expected
+
+
 @pytest.mark.parametrize("schedule", ["quad", "linear", "warmup10", "warmup50", "const", "jsd"])
 def test_get_beta_schedule_returns_valid_schedule(schedule):
     betas = get_beta_schedule(

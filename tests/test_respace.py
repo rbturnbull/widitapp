@@ -23,6 +23,10 @@ def test_space_timesteps_accepts_comma_separated_counts():
     assert space_timesteps(10, "2,3") == {0, 4, 5, 7, 9}
 
 
+def test_space_timesteps_single_count_section_uses_first_step_in_section():
+    assert space_timesteps(6, [1, 2]) == {0, 3, 5}
+
+
 def test_space_timesteps_accepts_ddim_stride():
     assert space_timesteps(10, "ddim5") == {0, 2, 4, 6, 8}
 
@@ -140,3 +144,22 @@ def test_spaced_diffusion_condition_mean_wraps_condition_function_timesteps():
 
     assert torch.equal(seen["ts"], torch.tensor([1, 3]))
     assert torch.allclose(result, torch.full_like(x, 2.0))
+
+
+def test_spaced_diffusion_condition_score_wraps_condition_function_timesteps():
+    seen = {}
+    diffusion = SpacedDiffusion(use_timesteps={1, 3}, **diffusion_kwargs())
+    x = torch.zeros(2, 1, 2, 2)
+    t = torch.tensor([0, 1])
+    p_mean_var = diffusion.p_mean_variance(lambda x, ts: torch.zeros_like(x), x, t)
+
+    def cond_fn(x, ts, value):
+        seen["ts"] = ts.clone()
+        return torch.full_like(x, value)
+
+    result = diffusion.condition_score(cond_fn, p_mean_var, x, t, {"value": 1.0})
+
+    assert torch.equal(seen["ts"], torch.tensor([1, 3]))
+    assert result["mean"].shape == x.shape
+    assert result["pred_xstart"].shape == x.shape
+    assert not torch.allclose(result["pred_xstart"], p_mean_var["pred_xstart"])

@@ -45,6 +45,164 @@ def test_app_model_builds_unet():
     assert model.spatial_dim == 2
 
 
+def test_app_model_loads_checkpoint_when_provided(tmp_path):
+    app = WiDiTApp()
+    checkpoint = tmp_path / "model.pt"
+    loaded_model = object()
+
+    with patch("widit.load_model", return_value=loaded_model) as load_model:
+        model = app.model(checkpoint=checkpoint)
+
+    assert model is loaded_model
+    load_model.assert_called_once_with(checkpoint)
+
+
+@pytest.mark.parametrize("dim_alias", ["spatial_dim", "spatial_dims"])
+def test_app_model_accepts_spatial_dimension_aliases(dim_alias):
+    app = WiDiTApp()
+    built_model = torch.nn.Linear(1, 1)
+
+    with patch("widit.WiDiT", return_value=built_model) as widit:
+        model = WiDiTApp.model.func(
+            app,
+            use_diffusion=True,
+            in_channels=2,
+            hidden_size=32,
+            depth=2,
+            num_heads=4,
+            patch_size=2,
+            window_size=3,
+            mlp_ratio=2.5,
+            use_flash_attention=False,
+            timestep_embed_dim=16,
+            **{dim_alias: 3},
+        )
+
+    assert model is built_model
+    widit.assert_called_once_with(
+        in_channels=2,
+        out_channels=2,
+        use_conditioning=True,
+        window_size=3,
+        mlp_ratio=2.5,
+        use_flash_attention=False,
+        timestep_embed_dim=16,
+        spatial_dim=3,
+        hidden_size=32,
+        depth=2,
+        num_heads=4,
+        patch_size=2,
+    )
+
+
+def test_app_model_respects_explicit_out_channels_and_conditioning():
+    app = WiDiTApp()
+    built_model = torch.nn.Linear(1, 1)
+
+    with patch("widit.WiDiT", return_value=built_model) as widit:
+        model = app.model(
+            use_diffusion=True,
+            use_conditioning=False,
+            out_channels=7,
+            hidden_size=32,
+            depth=2,
+            num_heads=4,
+            patch_size=2,
+        )
+
+    assert model is built_model
+    assert widit.call_args.kwargs["out_channels"] == 7
+    assert widit.call_args.kwargs["use_conditioning"] is False
+
+
+def test_app_model_uses_preset_instantiator():
+    app = WiDiTApp()
+    built_model = torch.nn.Linear(1, 1)
+    preset_instantiator = Mock(return_value=built_model)
+
+    with patch("widit.PRESETS", {"tiny": preset_instantiator}):
+        model = app.model(
+            preset="tiny",
+            use_diffusion=False,
+            in_channels=1,
+            window_size=5,
+            mlp_ratio=3.0,
+            use_flash_attention=False,
+            timestep_embed_dim=8,
+        )
+
+    assert model is built_model
+    preset_instantiator.assert_called_once_with(
+        in_channels=1,
+        out_channels=1,
+        use_conditioning=False,
+        window_size=5,
+        mlp_ratio=3.0,
+        use_flash_attention=False,
+        timestep_embed_dim=8,
+    )
+
+
+def test_app_model_rejects_unknown_preset():
+    app = WiDiTApp()
+
+    with pytest.raises(AssertionError, match="not in PRESETS"):
+        app.model(preset="missing")
+
+
+def test_app_model_unet_passes_constructor_arguments():
+    app = WiDiTApp()
+    built_model = torch.nn.Conv2d(1, 1, 1)
+
+    with patch("widit.Unet", return_value=built_model) as unet:
+        model = app.model(
+            unet=True,
+            use_diffusion=True,
+            use_conditioning=False,
+            in_channels=2,
+            out_channels=4,
+            dim=3,
+            filters=16,
+            kernel=5,
+            layers=6,
+            timestep_embed_dim=32,
+        )
+
+    assert model is built_model
+    unet.assert_called_once_with(
+        in_channels=2,
+        out_channels=4,
+        filters=16,
+        kernel_size=5,
+        layers=6,
+        spatial_dim=3,
+        use_conditioning=False,
+        timestep_embed_dim=32,
+    )
+
+
+def test_app_model_verbose_prints_summary(capsys):
+    app = WiDiTApp()
+    built_model = torch.nn.Linear(2, 1)
+
+    with patch("widit.WiDiT", return_value=built_model):
+        model = app.model(
+            use_diffusion=False,
+            hidden_size=32,
+            depth=2,
+            num_heads=4,
+            patch_size=2,
+            verbose=True,
+        )
+
+    captured = capsys.readouterr()
+    assert model is built_model
+    assert "Model:" in captured.out
+    assert "Model Summary:" in captured.out
+    assert "Model has 3 parameters" in captured.out
+    assert "Model has 3 trainable parameters" in captured.out
+
+
 def test_app_datasets_is_not_implemented_on_base_class():
     app = WiDiTApp()
 

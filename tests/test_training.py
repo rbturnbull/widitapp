@@ -1,5 +1,6 @@
 import logging
 import math
+import importlib
 from unittest.mock import Mock, patch
 
 import pytest
@@ -77,6 +78,23 @@ def test_create_logger_writes_file(tmp_path):
     finally:
         logger.handlers.clear()
         logger.handlers.extend(old_handlers)
+
+
+def test_training_import_sets_wandb_to_none_when_import_fails():
+    original_import = __import__
+
+    def import_without_wandb(name, *args, **kwargs):
+        if name == "wandb":
+            raise RuntimeError("wandb import failed")
+        return original_import(name, *args, **kwargs)
+
+    try:
+        with patch("builtins.__import__", side_effect=import_without_wandb):
+            reloaded = importlib.reload(training_module)
+
+        assert reloaded.wandb is None
+    finally:
+        importlib.reload(training_module)
 
 
 def test_get_state_dict_for_saving_prefers_module():
@@ -407,6 +425,30 @@ def test_train_skips_cuda_oom_forward_batch_and_continues(tmp_path):
     log_text = (tmp_path / "skip-oom" / "log.txt").read_text()
     assert "Skipping CUDA out-of-memory training batch" in log_text
     assert "shape=(1, 1)" in log_text
+
+
+def test_train_reraises_non_cuda_oom_forward_error(tmp_path):
+    class ErrorModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1)
+
+        def forward(self, x, timestep=None):
+            raise RuntimeError("not a CUDA memory error")
+
+    dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+
+    with pytest.raises(RuntimeError, match="not a CUDA memory error"):
+        run_train_on_cpu(
+            model=ErrorModel(),
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=100,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="non-oom-error",
+        )
 
 
 def test_train_validation_saves_best_checkpoint(tmp_path):
