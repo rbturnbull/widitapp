@@ -785,6 +785,33 @@ def test_ddim_reverse_sample_rejects_nonzero_eta():
         )
 
 
+def test_ddim_reverse_sample_applies_condition_score(monkeypatch):
+    diffusion = make_diffusion()
+    x = torch.zeros(1, 1, 2, 2)
+    t = torch.tensor([0])
+    calls = []
+
+    def fake_condition_score(cond_fn, p_mean_var, x, t, model_kwargs=None):
+        calls.append((cond_fn, p_mean_var, x, t, model_kwargs))
+        out = p_mean_var.copy()
+        out["pred_xstart"] = torch.full_like(x, 0.5)
+        return out
+
+    monkeypatch.setattr(diffusion, "condition_score", fake_condition_score)
+
+    out = diffusion.ddim_reverse_sample(
+        ZeroModel(),
+        x,
+        t,
+        cond_fn=lambda x, t, **kwargs: torch.ones_like(x),
+        model_kwargs={"label": "conditioned"},
+    )
+
+    assert len(calls) == 1
+    assert calls[0][4] == {"label": "conditioned"}
+    assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.5))
+
+
 def test_ddim_reverse_sample_returns_expected_shapes():
     diffusion = make_diffusion(model_mean_type=ModelMeanType.START_X)
     x = torch.zeros(1, 1, 2, 2)

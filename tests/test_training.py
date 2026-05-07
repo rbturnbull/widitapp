@@ -359,6 +359,34 @@ def test_train_logs_training_metrics_to_wandb(tmp_path):
     fake_wandb.finish.assert_called_once_with()
 
 
+def test_train_warns_when_wandb_logging_requested_but_wandb_unavailable(tmp_path):
+    class LinearWithTimestep(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1, bias=False)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+    dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+
+    with patch("widitapp.training.wandb", None):
+        run_train_on_cpu(
+            model=LinearWithTimestep(),
+            training_dataloader=dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=100,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="wandb-missing",
+            wandb_logging=True,
+        )
+
+    log_text = (tmp_path / "wandb-missing" / "log.txt").read_text()
+    assert "wandb=True but package not available. Skipping W&B init." in log_text
+
+
 def test_train_skips_non_finite_input_batch_before_forward(tmp_path):
     class CountingModel(torch.nn.Module):
         def __init__(self):
