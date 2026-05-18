@@ -4411,7 +4411,7 @@ torch = ">=2.2.0"
 type = "git"
 url = "ssh://git@github.com/rbturnbull/WiDiT.git"
 reference = "main"
-resolved_reference = "c35bf52abd2c570c845f2df67c93c3fc38cb46d7"
+resolved_reference = "10737192fa505b8ecafb31e8a4e07f6c421f25a7"
 
 [[package]]
 name = "zipp"
