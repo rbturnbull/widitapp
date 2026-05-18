@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import logging
+import math
 import os
 from glob import glob
 from copy import deepcopy
@@ -143,6 +144,7 @@ def _run_validation_loop(
         x = x.to(device=device, dtype=dtype, non_blocking=True)
         target = target.to(device=device, dtype=dtype, non_blocking=True)
 
+        extra_losses = {}
         if use_diffusion:
             # Mirror training: model(input=target, conditioned=x)
             t = torch.randint(
@@ -173,10 +175,23 @@ def _run_validation_loop(
                 for name, extra in extra_criteria.items():
                     extra_loss = extra(y, target)
                     extra_loss = accelerator.reduce(extra_loss, reduction="mean")
-                    extra_totals[name] += extra_loss.item()
+                    extra_losses[name] = extra_loss
 
         loss = accelerator.reduce(loss, reduction="mean")
+        all_losses_are_finite = is_loss_finite(loss, accelerator) and all(
+            is_loss_finite(extra_loss, accelerator) for extra_loss in extra_losses.values()
+        )
+        if not all_losses_are_finite:
+            if accelerator.is_main_process:
+                logging.getLogger("train").warning(
+                    "Skipping non-finite validation batch: "
+                    f"loss={loss_value_for_logging(loss)}"
+                )
+            continue
+
         total_loss += loss.item()
+        for name, extra_loss in extra_losses.items():
+            extra_totals[name] += extra_loss.item()
         total_batches += 1
 
     if total_batches <= 0:
@@ -298,6 +313,7 @@ def train(
     running_loss = 0.0
     start_time = time()
     best_val_loss = float("inf")
+    best_checkpoint_saved = False
 
     if accelerator.is_main_process:
         logger.info(f"Training for {epochs} epoch(s)...")
@@ -433,11 +449,22 @@ def train(
                     wandb.log(log_payload, step=train_steps)
 
                 # Save best
-                if val_loss_value < best_val_loss:
-                    best_val_loss = val_loss_value
+                val_loss_is_finite = math.isfinite(val_loss_value)
+                is_best = val_loss_is_finite and val_loss_value < best_val_loss
+                save_missing_best = not best_checkpoint_saved
+                if is_best or save_missing_best:
+                    if val_loss_is_finite:
+                        best_val_loss = val_loss_value
+                    best_checkpoint_saved = True
                     best_path = f"{checkpoint_dir}/best.pt"
                     ema.save(best_path)
-                    logger.info(f"New best checkpoint (val_loss={val_loss_value:.4f}) saved to {best_path}")
+                    if is_best:
+                        logger.info(f"New best checkpoint (val_loss={val_loss_value:.4f}) saved to {best_path}")
+                    else:
+                        logger.warning(
+                            "Validation loss is non-finite and no best checkpoint exists; "
+                            f"saved fallback checkpoint to {best_path}"
+                        )
 
                     if wandb_logging and wandb is not None and wandb_log_artifacts:
                         art = wandb.Artifact(f"{model_string_name}-best", type="model")

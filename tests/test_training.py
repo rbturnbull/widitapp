@@ -217,6 +217,46 @@ def test_run_validation_loop_empty_dataloader_returns_nan_loss():
     assert math.isnan(loss["loss"])
 
 
+def test_run_validation_loop_skips_non_finite_loss_batches():
+    x = torch.tensor([[float("nan")], [1.0]])
+    target = torch.zeros(2, 1)
+    dl = DataLoader(TensorDataset(x, target), batch_size=1)
+    accelerator = Accelerator(mixed_precision="no")
+
+    loss = _run_validation_loop(
+        accelerator=accelerator,
+        model_for_eval=IdentityModel(),
+        diffusion=None,
+        dataloader=dl,
+        device=accelerator.device,
+        dtype=torch.float32,
+        use_diffusion=False,
+        criterion=build_loss_fn("mse"),
+    )
+
+    assert loss["loss"] == 1.0
+
+
+def test_run_validation_loop_returns_nan_when_all_batches_are_non_finite():
+    x = torch.full((2, 1), float("nan"))
+    target = torch.zeros(2, 1)
+    dl = DataLoader(TensorDataset(x, target), batch_size=1)
+    accelerator = Accelerator(mixed_precision="no")
+
+    loss = _run_validation_loop(
+        accelerator=accelerator,
+        model_for_eval=IdentityModel(),
+        diffusion=None,
+        dataloader=dl,
+        device=accelerator.device,
+        dtype=torch.float32,
+        use_diffusion=False,
+        criterion=build_loss_fn("mse"),
+    )
+
+    assert math.isnan(loss["loss"])
+
+
 def test_run_validation_loop_diffusion_uses_mocked_diffusion():
     x = torch.randn(4, 1, 2, 2)
     target = torch.randn(4, 1, 2, 2)
@@ -614,6 +654,41 @@ def test_train_validation_saves_best_checkpoint(tmp_path):
     log_text = (tmp_path / "validation" / "log.txt").read_text()
     assert "val/loss=0.2500" in log_text
     assert "New best checkpoint" in log_text
+
+
+def test_train_validation_saves_fallback_checkpoint_when_val_loss_is_nan(tmp_path):
+    class SaveModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(1, 1)
+
+        def forward(self, x, timestep=None):
+            return self.linear(x)
+
+        def save(self, path):
+            torch.save(self.state_dict(), path)
+
+    model = SaveModel()
+    training_dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+    validation_dataloader = DataLoader(TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)), batch_size=1)
+
+    with patch("widitapp.training._run_validation_loop", return_value={"loss": float("nan")}):
+        run_train_on_cpu(
+            model=model,
+            training_dataloader=training_dataloader,
+            validation_dataloader=validation_dataloader,
+            results_dir=str(tmp_path),
+            epochs=1,
+            log_every=100,
+            use_diffusion=False,
+            precision="fp32",
+            run_name="nan-validation",
+        )
+
+    assert (tmp_path / "nan-validation" / "checkpoints" / "best.pt").exists()
+    log_text = (tmp_path / "nan-validation" / "log.txt").read_text()
+    assert "val/loss=nan" in log_text
+    assert "saved fallback checkpoint" in log_text
 
 
 def test_train_logs_validation_and_best_artifact_to_wandb(tmp_path):
