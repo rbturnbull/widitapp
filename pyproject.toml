@@ -20,7 +20,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
 cluey = ">=0.1.0"
-WiDiT = {git = "git@github.com:rbturnbull/WiDiT.git", branch="main"}
+WiDiT = ">=0.1.2"
 diffusers = ">=0.35.1"
 accelerate = ">=1.10.1"
 pandas = ">=2.3.2"
