@@ -22,13 +22,13 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install poetry
         run: pipx install poetry
 
       - name: Initialise Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: poetry
@@ -49,20 +49,20 @@ jobs:
           rm -f gh-pages/coverage/.gitignore
 
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v6
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: 'gh-pages'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
 
       - name: Create Coverage Badge
-        uses: schneegans/dynamic-badges-action@v1.1.0
+        uses: schneegans/dynamic-badges-action@v1.9.0
         with:
           auth:  ${{ secrets.GIST_SECRET }} 
           gistID: 8187b43915256acc806510b100cf15d2
@@ -70,4 +70,3 @@ jobs:
           label: coverage
           message:  ${{ env.COVERAGE }} 
           color: green
-
