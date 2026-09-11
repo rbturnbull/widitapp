@@ -307,11 +307,13 @@ Example applications
 
 The following projects demonstrate how to extend WiDiTApp:
 
-* **Supercat** (``supercat/apps.py``): provides 2D and 3D super-resolution
+* `Supercat <https://github.com/rbturnbull/supercat/>`_
+  (``supercat/apps.py``): provides 2D and 3D super-resolution
   datasets, tiled prediction, and additional porosity tools. Its
   ``supercat/pretrain.py`` provides further subclasses for image and video
   pretraining.
-* **Dosefusion** (``dosefusion/apps.py``): builds datasets from a CSV with
+* `Dosefusion <https://github.com/quell-devs/dosefusion.git>`_
+  (``dosefusion/apps.py``): builds datasets from a CSV with
   partition selection and implements volume prediction with diffusion and
   fusion sampling options. Its data preparation and prediction code live in
   ``dosefusion/data.py`` and ``dosefusion/models.py``.
