@@ -1,6 +1,7 @@
 import logging
 import math
 import importlib
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 import pytest
@@ -56,14 +57,24 @@ class IdentityModel(torch.nn.Module):
         return x
 
 
+@contextmanager
+def mock_cuda_for_cpu_training():
+    # Bypass the training CUDA requirement while keeping all computation on CPU.
+    # Exercise AdamW's CUDA-build path even on macOS, but mock its driver query.
+    with patch("torch.cuda.is_available", return_value=True), patch(
+        "torch.backends.cuda.is_built", return_value=True
+    ), patch("torch.cuda.is_current_stream_capturing", return_value=False), patch(
+        "torch.cuda.synchronize"
+    ):
+        yield
+
+
 def run_train_on_cpu(**kwargs):
     logger = logging.getLogger("train")
     old_handlers = list(logger.handlers)
     logger.handlers.clear()
     try:
-        with patch("widitapp.training.Accelerator", FakeAccelerator), patch(
-            "torch.cuda.is_available", return_value=True
-        ), patch("torch.cuda.synchronize"):
+        with patch("widitapp.training.Accelerator", FakeAccelerator), mock_cuda_for_cpu_training():
             return training_module.train(**kwargs)
     finally:
         logger.handlers.clear()
@@ -338,9 +349,9 @@ def test_train_uses_quiet_logger_for_non_main_process(tmp_path):
     old_handlers = list(logger.handlers)
     logger.handlers.clear()
     try:
-        with patch("widitapp.training.Accelerator", FakeWorkerAccelerator), patch(
-            "torch.cuda.is_available", return_value=True
-        ), patch("torch.cuda.synchronize"), patch("widitapp.training.create_logger") as create_logger:
+        with patch("widitapp.training.Accelerator", FakeWorkerAccelerator), mock_cuda_for_cpu_training(), patch(
+            "widitapp.training.create_logger"
+        ) as create_logger:
             training_module.train(
                 model=LinearWithTimestep(),
                 training_dataloader=dataloader,
