@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.abspath(".."))
 
 # -- Project information -----------------------------------------------------
 
-project = "supercat"
-copyright = "2022, MDAP"
+project = "WiDiT App"
+copyright = "2026, MDAP"
 author = "MDAP"
 
 # The full version, including alpha/beta/rc tags
