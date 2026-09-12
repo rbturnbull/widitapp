@@ -129,6 +129,7 @@ def _run_validation_loop(
     criterion: torch.nn.Module,
     extra_criteria: Dict[str, torch.nn.Module] | None = None,
     timestep_seed: int = 42,
+    diffusion_loss_fn: torch.nn.Module | None = None,
 ) -> Dict[str, float]:
     model_for_eval.eval()
     total_loss, total_batches = 0.0, 0
@@ -166,8 +167,9 @@ def _run_validation_loop(
                 t,
                 dict(conditioned=x),
                 noise=noise,
+                **({"image_loss_fn": diffusion_loss_fn} if diffusion_loss_fn is not None else {}),
             )
-            loss = loss_dict["mse"].mean()
+            loss = loss_dict["mse" if diffusion_loss_fn is None else "loss"].mean()
         else:
             y = model_for_eval(x, timestep=timestep)
             loss = criterion(y, target)
@@ -219,6 +221,7 @@ def train(
     learning_rate: float = 1e-4,
     wandb_config: Optional[Dict] = None,
     wandb_log_artifacts: bool = False,
+    diffusion_loss_fn: torch.nn.Module | None = None,
 ):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -275,7 +278,9 @@ def train(
     if accelerator.is_main_process:
         logger.info(f"Training with precision={precision} (dtype={train_dtype}) on {device}")
 
-    criterion = build_loss_fn(loss_fn)
+    criterion = build_loss_fn(loss_fn).to(device)
+    if diffusion_loss_fn is not None:
+        diffusion_loss_fn = diffusion_loss_fn.to(device)
     extra_val_criteria = {
         "mse": torch.nn.MSELoss(reduction="mean"),
         "smoothl1": torch.nn.SmoothL1Loss(reduction="mean"),
@@ -352,7 +357,10 @@ def train(
                     if use_diffusion:
                         timestep = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=accelerator.device)
                         # Mirror your earlier logic: model(input=target, conditioned=x)
-                        loss_dict = diffusion.training_losses(model, target, timestep, dict(conditioned=x))
+                        loss_dict = diffusion.training_losses(
+                            model, target, timestep, dict(conditioned=x),
+                            **({"image_loss_fn": diffusion_loss_fn} if diffusion_loss_fn is not None else {}),
+                        )
                         loss = loss_dict["loss"].mean()
                     else:
                         y = model(x, timestep=timestep)
@@ -436,6 +444,7 @@ def train(
                 criterion=criterion,
                 extra_criteria=(None if use_diffusion else extra_val_criteria),
                 timestep_seed=0,  # deterministic validation timesteps
+                diffusion_loss_fn=diffusion_loss_fn,
             )
             val_loss_value, log_payload = build_val_log_payload(
                 val_loss,

@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 import torch
@@ -292,7 +292,42 @@ def test_app_train_builds_model_dataloaders_and_calls_training(tmp_path):
         run_name="unit-run",
         wandb_logging=True,
         wandb_project="WiDiTApp",
+        loss_fn=ANY,
     )
+    assert isinstance(train.call_args.kwargs["loss_fn"], torch.nn.MSELoss)
+
+
+@pytest.mark.parametrize("use_diffusion", [False, True])
+def test_app_train_forwards_subclass_loss_options(use_diffusion):
+    from cluey import method
+
+    class CustomApp(WiDiTApp):
+        @method
+        def loss(self, penalty: float = 0.25, use_diffusion: bool = True):
+            self.received = (penalty, use_diffusion)
+            return torch.nn.SmoothL1Loss(beta=penalty)
+
+    from cluey.testing import CliRunner
+
+    help_result = CliRunner().invoke(CustomApp().tools_app, ["train", "--help"])
+    assert help_result.exit_code == 0, help_result.output
+    assert "--penalty" in help_result.output
+
+    app = CustomApp()
+    app.model = Mock(return_value=torch.nn.Linear(1, 1))
+    app.dataloaders = Mock(return_value=(object(), None))
+    with patch("widitapp.training.train") as train:
+        app.train(use_diffusion=use_diffusion, penalty=0.75)
+    assert app.received == (0.75, use_diffusion)
+    key = "diffusion_loss_fn" if use_diffusion else "loss_fn"
+    assert train.call_args.kwargs[key].beta == 0.75
+
+
+def test_default_app_loss():
+    app = WiDiTApp()
+    assert app.loss() is None
+    assert isinstance(app.loss(use_diffusion=False), torch.nn.MSELoss)
+    assert isinstance(app.loss(use_diffusion=False, loss_fn="smoothl1"), torch.nn.SmoothL1Loss)
 
 
 # def test_app_train_requires_cuda(monkeypatch):

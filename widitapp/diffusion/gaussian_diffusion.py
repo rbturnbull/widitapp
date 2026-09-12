@@ -747,7 +747,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, image_loss_fn=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -756,9 +756,14 @@ class GaussianDiffusion:
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
         :param noise: if specified, the specific Gaussian noise to try to remove.
+        :param image_loss_fn: optional extra loss on (unclipped predicted x_0,
+            x_start), returning a scalar batch mean or one loss per example.
+            Supported for MSE and RESCALED_MSE objectives.
         :return: a dict with the key "loss" containing a tensor of shape [N].
                  Some mean or variance settings may also have other keys.
         """
+        if image_loss_fn is not None and self.loss_type not in (LossType.MSE, LossType.RESCALED_MSE):
+            raise ValueError("image_loss_fn requires an MSE diffusion objective.")
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:
@@ -824,6 +829,23 @@ class GaussianDiffusion:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:
                 terms["loss"] = terms["mse"]
+            if image_loss_fn is not None:
+                if self.model_mean_type == ModelMeanType.START_X:
+                    pred_xstart = model_output
+                elif self.model_mean_type == ModelMeanType.EPSILON:
+                    pred_xstart = self._predict_xstart_from_eps(x_t, t, model_output)
+                else:
+                    pred_xstart = (
+                        model_output
+                        - _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) * x_t
+                    ) / _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape)
+                image_loss = image_loss_fn(pred_xstart, x_start)
+                if not isinstance(image_loss, th.Tensor) or image_loss.shape not in (
+                    th.Size([]), th.Size([x_start.shape[0]])
+                ):
+                    raise ValueError("image_loss_fn must return a scalar batch mean or shape [N].")
+                terms["image_loss"] = image_loss.expand_as(terms["mse"])
+                terms["loss"] = terms["loss"] + terms["image_loss"]
         else:
             raise NotImplementedError(self.loss_type)
 

@@ -142,7 +142,20 @@ class WiDiTApp(Cluey):
         
         return training_dataloader, validation_dataloader
 
-    @tool("model", "dataloaders")
+    @method
+    def loss(self, loss_fn: str = "mse", use_diffusion: bool = True):
+        """Build a supervised loss, or an optional extra diffusion image loss.
+
+        Override with ``@method`` to expose custom loss options to ``train``.
+        Return a module accepting (prediction, target). For diffusion these
+        are the unclipped clean-image estimate and clean target; the returned
+        loss is added to the standard diffusion objective. None adds nothing.
+        """
+        from .training import build_loss_fn
+
+        return None if use_diffusion else build_loss_fn(loss_fn)
+
+    @tool("model", "dataloaders", "loss")
     def train(
         self,
         epochs: int = 40,
@@ -164,6 +177,11 @@ class WiDiTApp(Cluey):
         wandb_project = wandb_project or str(self.__class__.__name__)
 
         training_dataloader, validation_dataloader = self.dataloaders(**kwargs)
+        criterion = self.loss(use_diffusion=use_diffusion, **kwargs)
+        loss_kwargs = (
+            {"diffusion_loss_fn": criterion}
+            if use_diffusion else {"loss_fn": criterion}
+        )
         train(
             model=model,
             training_dataloader=training_dataloader,
@@ -176,6 +194,7 @@ class WiDiTApp(Cluey):
             run_name=run_name,
             wandb_logging=wandb,
             wandb_project=wandb_project,
+            **loss_kwargs,
         )
 
     @main

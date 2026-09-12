@@ -756,7 +756,9 @@ def test_train_logs_validation_and_best_artifact_to_wandb(tmp_path):
     fake_wandb.finish.assert_called_once_with()
 
 
-def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path):
+@pytest.mark.parametrize("with_image_loss", [False, True])
+def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path, with_image_loss):
+    image_loss = torch.nn.L1Loss() if with_image_loss else None
     class DiffusionModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -771,7 +773,8 @@ def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path):
         def __init__(self):
             self.calls = []
 
-        def training_losses(self, model, target, timestep, model_kwargs):
+        def training_losses(self, model, target, timestep, model_kwargs, **kwargs):
+            assert kwargs == ({"image_loss_fn": image_loss} if with_image_loss else {})
             self.calls.append((target.detach().clone(), timestep.detach().clone(), model_kwargs))
             prediction = model(target, timestep, **model_kwargs)
             return {"loss": (prediction - 0.0).flatten(start_dim=1).mean(dim=1)}
@@ -795,6 +798,7 @@ def test_train_diffusion_uses_created_diffusion_and_updates_model(tmp_path):
             precision="fp32",
             learning_rate=0.1,
             run_name="diffusion",
+            diffusion_loss_fn=image_loss,
         )
 
     create_diffusion.assert_called_once_with(timestep_respacing="")
@@ -1084,3 +1088,22 @@ def test_clear_after_cuda_oom_clears_gradients_and_cuda_cache():
 
     assert all(parameter.grad is None for parameter in model.parameters())
     empty_cache.assert_called_once_with()
+
+
+def test_diffusion_validation_includes_custom_image_loss():
+    accelerator = Accelerator(mixed_precision="no")
+    criterion = torch.nn.L1Loss()
+    diffusion = Mock(num_timesteps=10)
+    diffusion.training_losses.return_value = {
+        "mse": torch.tensor([1.0, 2.0]),
+        "loss": torch.tensor([3.0, 5.0]),
+    }
+    data = torch.zeros(2, 1, 2, 2)
+    result = _run_validation_loop(
+        accelerator=accelerator, model_for_eval=IdentityModel(), diffusion=diffusion,
+        dataloader=DataLoader(TensorDataset(data, data), batch_size=2),
+        device=accelerator.device, dtype=torch.float32, use_diffusion=True,
+        criterion=build_loss_fn("mse"), diffusion_loss_fn=criterion,
+    )
+    assert result["loss"] == 4.0
+    assert diffusion.training_losses.call_args.kwargs["image_loss_fn"] is criterion

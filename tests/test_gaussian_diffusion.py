@@ -874,3 +874,68 @@ def test_ddim_reverse_sample_returns_expected_shapes():
     assert out["sample"].shape == x.shape
     assert out["pred_xstart"].shape == x.shape
     assert torch.allclose(out["pred_xstart"], torch.full_like(x, 0.5))
+
+
+@pytest.mark.parametrize("mean_type", list(ModelMeanType))
+@pytest.mark.parametrize("per_example", [False, True])
+def test_image_loss_uses_clean_prediction_and_preserves_base_loss(mean_type, per_example):
+    diffusion = make_diffusion(model_mean_type=mean_type)
+    clean = torch.zeros(2, 1, 2, 2)
+    noise = torch.ones_like(clean)
+    t = torch.tensor([1, 2])
+    noisy = diffusion.q_sample(clean, t, noise=noise)
+    prediction = torch.full_like(clean, 0.3, requires_grad=True)
+    if mean_type == ModelMeanType.EPSILON:
+        output = diffusion._predict_eps_from_xstart(noisy, t, prediction)
+    elif mean_type == ModelMeanType.START_X:
+        output = prediction
+    else:
+        output = diffusion.q_posterior_mean_variance(prediction, noisy, t)[0]
+    calls = []
+
+    def model(*args, **kwargs):
+        calls.append(1)
+        return output
+
+    def image_loss(pred, target):
+        torch.testing.assert_close(pred, prediction)
+        torch.testing.assert_close(target, clean)
+        losses = mean_flat((pred - target) ** 2)
+        return losses if per_example else losses.mean()
+
+    baseline = diffusion.training_losses(model, clean, t, noise=noise)
+    calls.clear()
+    result = diffusion.training_losses(model, clean, t, noise=noise, image_loss_fn=image_loss)
+    assert len(calls) == 1
+    torch.testing.assert_close(result["mse"], baseline["mse"])
+    torch.testing.assert_close(result["loss"], baseline["loss"] + 0.09)
+    result["image_loss"].mean().backward()
+    assert prediction.grad is not None
+    assert torch.all(prediction.grad > 0)
+
+
+def test_image_loss_keeps_learned_variance_objective():
+    diffusion = make_diffusion(model_var_type=ModelVarType.LEARNED_RANGE)
+    clean = torch.zeros(2, 1, 2, 2)
+    noise = torch.ones_like(clean)
+    t = torch.tensor([1, 2])
+    output = torch.zeros(2, 2, 2, 2, requires_grad=True)
+    model = lambda *args, **kwargs: output
+    baseline = diffusion.training_losses(model, clean, t, noise=noise)
+    explicit_default = diffusion.training_losses(model, clean, t, noise=noise, image_loss_fn=None)
+    for key in baseline:
+        torch.testing.assert_close(baseline[key], explicit_default[key], rtol=0, atol=0)
+    result = diffusion.training_losses(model, clean, t, noise=noise, image_loss_fn=torch.nn.MSELoss())
+    torch.testing.assert_close(result["vb"], baseline["vb"])
+    torch.testing.assert_close(result["loss"], baseline["loss"] + result["image_loss"])
+    result["loss"].mean().backward()
+    assert torch.isfinite(output.grad).all()
+
+
+def test_image_loss_rejects_unreduced_output():
+    diffusion = make_diffusion()
+    with pytest.raises(ValueError, match="scalar batch mean or shape"):
+        diffusion.training_losses(
+            ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([1, 2]),
+            image_loss_fn=torch.nn.MSELoss(reduction="none"),
+        )
