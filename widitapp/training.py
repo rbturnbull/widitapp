@@ -59,9 +59,8 @@ def build_val_log_payload(
 ) -> tuple[float, Dict[str, float]]:
     val_loss_value = val_loss.get("loss", float("nan")) if isinstance(val_loss, dict) else val_loss
     payload = {"val/loss": val_loss_value, "epoch": epoch, "global_step": train_steps}
-    if isinstance(val_loss, dict) and not use_diffusion:
-        payload["val/mse"] = val_loss.get("mse", float("nan"))
-        payload["val/smoothl1"] = val_loss.get("smoothl1", float("nan"))
+    if isinstance(val_loss, dict):
+        payload.update({f"val/{name}": value for name, value in val_loss.items()})
     return val_loss_value, payload
 
 
@@ -132,6 +131,10 @@ def _run_validation_loop(
     diffusion_loss_fn: torch.nn.Module | None = None,
 ) -> Dict[str, float]:
     model_for_eval.eval()
+    for name, metric in (extra_criteria or {}).items():
+        if not isinstance(name, str) or not name or name == "loss" or name.startswith("val/"):
+            raise ValueError("Metric names must be nonempty, omit 'val/', and cannot be 'loss'.")
+        metric.to(device).eval()
     total_loss, total_batches = 0.0, 0
     extra_totals = {name: 0.0 for name in (extra_criteria or {})}
     rng = torch.Generator(device=device).manual_seed(timestep_seed)
@@ -168,22 +171,24 @@ def _run_validation_loop(
                 dict(conditioned=x),
                 noise=noise,
                 **({"image_loss_fn": diffusion_loss_fn} if diffusion_loss_fn is not None else {}),
+                **({"return_pred_xstart": True} if extra_criteria else {}),
             )
             loss = loss_dict["mse" if diffusion_loss_fn is None else "loss"].mean()
+            if extra_criteria:
+                y = loss_dict["pred_xstart"]
         else:
             y = model_for_eval(x, timestep=timestep)
             loss = criterion(y, target)
-            if extra_criteria:
-                for name, extra in extra_criteria.items():
-                    extra_loss = extra(y, target)
-                    extra_loss = accelerator.reduce(extra_loss, reduction="mean")
-                    extra_losses[name] = extra_loss
+        if extra_criteria:
+            for name, extra in extra_criteria.items():
+                extra_loss = extra(y, target)
+                if not isinstance(extra_loss, torch.Tensor) or extra_loss.ndim != 0:
+                    raise ValueError(f"Metric '{name}' must return a scalar batch mean tensor.")
+                extra_loss = accelerator.reduce(extra_loss, reduction="mean")
+                extra_losses[name] = extra_loss
 
         loss = accelerator.reduce(loss, reduction="mean")
-        all_losses_are_finite = is_loss_finite(loss, accelerator) and all(
-            is_loss_finite(extra_loss, accelerator) for extra_loss in extra_losses.values()
-        )
-        if not all_losses_are_finite:
+        if not is_loss_finite(loss, accelerator):
             if accelerator.is_main_process:
                 logging.getLogger("train").warning(
                     "Skipping non-finite validation batch: "
@@ -197,7 +202,7 @@ def _run_validation_loop(
         total_batches += 1
 
     if total_batches <= 0:
-        return {"loss": float("nan")}
+        return {name: float("nan") for name in ("loss", *extra_totals)}
 
     result = {"loss": total_loss / total_batches}
     for name, total in extra_totals.items():
@@ -222,6 +227,7 @@ def train(
     wandb_config: Optional[Dict] = None,
     wandb_log_artifacts: bool = False,
     diffusion_loss_fn: torch.nn.Module | None = None,
+    metrics: Dict[str, torch.nn.Module] | None = None,
 ):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -281,10 +287,10 @@ def train(
     criterion = build_loss_fn(loss_fn).to(device)
     if diffusion_loss_fn is not None:
         diffusion_loss_fn = diffusion_loss_fn.to(device)
-    extra_val_criteria = {
+    extra_val_criteria = metrics if metrics is not None else ({} if use_diffusion else {
         "mse": torch.nn.MSELoss(reduction="mean"),
         "smoothl1": torch.nn.SmoothL1Loss(reduction="mean"),
-    }
+    })
 
     # ---- models ----
     model = model.to(device)
@@ -442,7 +448,7 @@ def train(
                 dtype=train_dtype,
                 use_diffusion=use_diffusion,
                 criterion=criterion,
-                extra_criteria=(None if use_diffusion else extra_val_criteria),
+                extra_criteria=extra_val_criteria or None,
                 timestep_seed=0,  # deterministic validation timesteps
                 diffusion_loss_fn=diffusion_loss_fn,
             )
@@ -454,6 +460,9 @@ def train(
             )
             if accelerator.is_main_process:
                 logger.info(f"(epoch={epoch:03d}) val/loss={val_loss_value:.4f}")
+                for name, value in val_loss.items():
+                    if name != "loss":
+                        logger.info(f"(epoch={epoch:03d}) val/{name}={value:.4f}")
                 if wandb_logging and wandb is not None:
                     wandb.log(log_payload, step=train_steps)
 

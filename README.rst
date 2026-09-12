@@ -100,7 +100,7 @@ Create your own training app
 As in Supercat and Dosefusion, implement ``datasets()`` and decorate it with
 Cluey's ``@method``. Return a pair of PyTorch datasets: training first, validation
 second. The inherited ``train`` tool collects the options from ``model()``,
-``dataloaders()``, ``loss()``, and your ``datasets()`` method.
+``dataloaders()``, ``loss()``, ``metrics()``, and your ``datasets()`` method.
 
 Save this example as ``myapp.py``. It reads tensor pairs from ``train.pt`` and
 ``validation.pt`` in a directory you provide:
@@ -310,9 +310,49 @@ For finer control, call ``widitapp.training.train`` directly with a model and
 data loaders. It additionally accepts ``precision`` (``fp16`` by default,
 ``bf16``, ``fp32``, or ``no``), ``loss_fn`` (``mse``, ``smoothl1``/``huber``, or
 a PyTorch loss module), ``diffusion_loss_fn`` (an optional extra image-loss
-module), ``wandb_config``, and ``wandb_log_artifacts``. The app's ``loss()`` result
+module), ``metrics`` (a dictionary of validation modules), ``wandb_config``,
+and ``wandb_log_artifacts``. The app's ``loss()`` result
 is passed as ``loss_fn`` for regression or ``diffusion_loss_fn`` for diffusion.
 Precision and the additional W&B configuration are not forwarded by the app.
+
+Custom validation metrics
+----------------------------------
+
+The app's ``metrics()`` method returns a dictionary of names to PyTorch modules.
+The default is ``{"mse": MSELoss(), "smoothl1": SmoothL1Loss()}`` for regression
+and an empty dictionary for diffusion, preserving the existing defaults.
+Extend it with Cluey's ``@method("super")`` to inherit both metrics and options:
+
+.. code-block:: python
+
+    class MyApp(WiDiTApp):
+        @method("super")
+        def metrics(self, **kwargs):
+            metrics = super().metrics(**kwargs)
+            metrics["custom_error"] = MyExistingMetric()
+            return metrics
+
+Each metric module accepts ``(prediction, target)`` and returns a scalar tensor
+representing the batch mean. Modules run in evaluation mode without gradients
+on the validation device. They should compute each batch independently; this
+interface does not manage stateful ``update/compute/reset`` metrics.
+
+For regression, ``prediction`` is the direct EMA model output. For diffusion,
+it is the unclipped clean-image estimate at a sampled timestep, using the same
+forward pass as the validation loss. It is not the result of a full sampling
+loop. Adding metrics does not enable an auxiliary loss or change ``val/loss``
+or checkpoint selection. Non-finite metric values are reported without
+discarding an otherwise finite validation loss.
+
+Use names without the ``val/`` prefix; ``loss`` is reserved. Values are averaged
+across processes and then across validation batches, giving batches equal
+weight, including an incomplete last batch. After each validation epoch,
+metrics appear as ``val/custom_error`` in the training log and in W&B when
+``wandb=True``. They are not evaluated during training steps.
+
+Subclasses can add, replace, or remove entries in the inherited dictionary.
+When calling the lower-level ``widitapp.training.train`` directly, ``metrics=None``
+selects the mode's defaults and ``metrics={}`` disables extra metrics.
 
 Checkpoints and prediction
 ----------------------------------

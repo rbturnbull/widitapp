@@ -724,7 +724,7 @@ def test_train_logs_validation_and_best_artifact_to_wandb(tmp_path):
 
     with patch("widitapp.training.wandb", fake_wandb), patch(
         "widitapp.training._run_validation_loop",
-        return_value={"loss": 0.25, "mse": 0.5, "smoothl1": 0.125},
+        return_value={"loss": 0.25, "mse": 0.5, "smoothl1": 0.125, "custom": 0.75},
     ):
         run_train_on_cpu(
             model=model,
@@ -748,6 +748,7 @@ def test_train_logs_validation_and_best_artifact_to_wandb(tmp_path):
     assert val_payload["val/loss"] == 0.25
     assert val_payload["val/mse"] == 0.5
     assert val_payload["val/smoothl1"] == 0.125
+    assert val_payload["val/custom"] == 0.75
     fake_wandb.Artifact.assert_called_once_with("SaveModel-best", type="model")
     best_path = tmp_path / "wandb-validation" / "checkpoints" / "best.pt"
     fake_artifact.add_file.assert_called_once_with(str(best_path))
@@ -858,7 +859,9 @@ def test_train_diffusion_skips_non_finite_loss_and_continues(tmp_path):
     assert "Skipping non-finite training loss" in log_text
 
 
-def test_train_diffusion_validation_passes_diffusion_to_validation_loop(tmp_path):
+@pytest.mark.parametrize("with_metrics", [False, True])
+def test_train_diffusion_validation_passes_diffusion_to_validation_loop(tmp_path, with_metrics):
+    metrics = {"custom": torch.nn.L1Loss()} if with_metrics else None
     class SaveModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -900,13 +903,14 @@ def test_train_diffusion_validation_passes_diffusion_to_validation_loop(tmp_path
             use_diffusion=True,
             precision="fp32",
             run_name="diffusion-validation",
+            metrics=metrics,
         )
 
     validation_loop.assert_called_once()
     _, kwargs = validation_loop.call_args
     assert kwargs["diffusion"] is diffusion
     assert kwargs["use_diffusion"] is True
-    assert kwargs["extra_criteria"] is None
+    assert kwargs["extra_criteria"] is metrics
     assert (tmp_path / "diffusion-validation" / "checkpoints" / "best.pt").exists()
 
 
@@ -965,7 +969,7 @@ def test_build_val_log_payload_accepts_dict():
     assert payload["val/smoothl1"] == 0.4
 
 
-def test_build_val_log_payload_omits_extra_metrics_for_diffusion():
+def test_build_val_log_payload_includes_requested_metrics_for_diffusion():
     val_loss_value, payload = build_val_log_payload(
         {"loss": 0.5, "mse": 0.6, "smoothl1": 0.4},
         use_diffusion=True,
@@ -974,7 +978,10 @@ def test_build_val_log_payload_omits_extra_metrics_for_diffusion():
     )
 
     assert val_loss_value == 0.5
-    assert payload == {"val/loss": 0.5, "epoch": 1, "global_step": 5}
+    assert payload == {
+        "val/loss": 0.5, "val/mse": 0.6, "val/smoothl1": 0.4,
+        "epoch": 1, "global_step": 5,
+    }
 
 
 def test_build_val_log_payload_uses_nan_for_missing_dict_loss():
@@ -987,8 +994,8 @@ def test_build_val_log_payload_uses_nan_for_missing_dict_loss():
 
     assert math.isnan(val_loss_value)
     assert math.isnan(payload["val/loss"])
-    assert math.isnan(payload["val/mse"])
-    assert math.isnan(payload["val/smoothl1"])
+    assert "val/mse" not in payload
+    assert "val/smoothl1" not in payload
 
 
 def test_is_loss_finite_accepts_finite_loss():
@@ -1107,3 +1114,52 @@ def test_diffusion_validation_includes_custom_image_loss():
     )
     assert result["loss"] == 4.0
     assert diffusion.training_losses.call_args.kwargs["image_loss_fn"] is criterion
+
+
+@pytest.mark.parametrize("use_diffusion", [False, True])
+def test_validation_custom_metrics_do_not_change_loss(use_diffusion):
+    from widitapp.diffusion import create_diffusion
+
+    class CaptureMetric(torch.nn.Module):
+        def forward(self, prediction, target):
+            assert not torch.is_grad_enabled()
+            assert not self.training
+            self.prediction = prediction.clone()
+            return (prediction - target).abs().mean()
+
+    accelerator = Accelerator(mixed_precision="no")
+    data = torch.ones(2, 1, 2, 2)
+    model = IdentityModel()
+    diffusion = create_diffusion("", learn_sigma=False) if use_diffusion else None
+    kwargs = dict(
+        accelerator=accelerator, model_for_eval=model, diffusion=diffusion,
+        dataloader=DataLoader(TensorDataset(data, data), batch_size=2),
+        device=accelerator.device, dtype=torch.float32,
+        use_diffusion=use_diffusion, criterion=build_loss_fn("mse"),
+    )
+    baseline = _run_validation_loop(**kwargs)
+    metric = CaptureMetric()
+    result = _run_validation_loop(**kwargs, extra_criteria={"custom": metric})
+    assert result["loss"] == baseline["loss"]
+    assert result["custom"] == (metric.prediction - data).abs().mean().item()
+    if not use_diffusion:
+        torch.testing.assert_close(metric.prediction, data)
+    _, payload = build_val_log_payload(result, use_diffusion=use_diffusion, epoch=1, train_steps=2)
+    assert payload["val/custom"] == result["custom"]
+
+
+def test_nonfinite_metric_does_not_discard_finite_validation_loss():
+    class NanMetric(torch.nn.Module):
+        def forward(self, prediction, target):
+            return prediction.mean() * float("nan")
+
+    accelerator = Accelerator(mixed_precision="no")
+    data = torch.ones(2, 1, 2, 2)
+    result = _run_validation_loop(
+        accelerator=accelerator, model_for_eval=IdentityModel(), diffusion=None,
+        dataloader=DataLoader(TensorDataset(data, data), batch_size=2),
+        device=accelerator.device, dtype=torch.float32, use_diffusion=False,
+        criterion=build_loss_fn("mse"), extra_criteria={"custom": NanMetric()},
+    )
+    assert result["loss"] == 0.0
+    assert math.isnan(result["custom"])

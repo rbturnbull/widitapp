@@ -293,8 +293,10 @@ def test_app_train_builds_model_dataloaders_and_calls_training(tmp_path):
         wandb_logging=True,
         wandb_project="WiDiTApp",
         loss_fn=ANY,
+        metrics=ANY,
     )
     assert isinstance(train.call_args.kwargs["loss_fn"], torch.nn.MSELoss)
+    assert set(train.call_args.kwargs["metrics"]) == {"mse", "smoothl1"}
 
 
 @pytest.mark.parametrize("use_diffusion", [False, True])
@@ -354,3 +356,32 @@ def test_default_app_loss():
 #             batch_size=1,
 #             num_workers=0,
 #         )
+
+
+@pytest.mark.parametrize("use_diffusion", [False, True])
+def test_app_metrics_inheritance_and_cli_forwarding(use_diffusion):
+    from cluey import method
+    from cluey.testing import CliRunner
+
+    class ChildApp(WiDiTApp):
+        @method("super")
+        def metrics(self, metric_beta: float = 0.5, **kwargs):
+            result = super().metrics(**kwargs)
+            result["custom"] = torch.nn.SmoothL1Loss(beta=metric_beta)
+            return result
+
+    app = ChildApp()
+    defaults = WiDiTApp().metrics(use_diffusion=use_diffusion)
+    assert set(defaults) == (set() if use_diffusion else {"mse", "smoothl1"})
+    app.model = Mock(return_value=torch.nn.Linear(1, 1))
+    app.dataloaders = Mock(return_value=(object(), None))
+    with patch("widitapp.training.train") as train:
+        result = CliRunner().invoke(app.tools_app, [
+            "train", "--metric-beta", "0.75",
+            "--use-diffusion" if use_diffusion else "--no-use-diffusion",
+        ])
+    assert result.exit_code == 0, (result.output, result.exception)
+    metrics = train.call_args.kwargs["metrics"]
+    assert set(metrics) == set(defaults) | {"custom"}
+    assert metrics["custom"].beta == 0.75
+    assert set(WiDiTApp().metrics(use_diffusion=use_diffusion)) == set(defaults)

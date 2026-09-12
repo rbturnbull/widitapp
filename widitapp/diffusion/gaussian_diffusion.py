@@ -747,7 +747,10 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, image_loss_fn=None):
+    def training_losses(
+        self, model, x_start, t, model_kwargs=None, noise=None,
+        image_loss_fn=None, return_pred_xstart=False,
+    ):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -759,6 +762,8 @@ class GaussianDiffusion:
         :param image_loss_fn: optional extra loss on (unclipped predicted x_0,
             x_start), returning a scalar batch mean or one loss per example.
             Supported for MSE and RESCALED_MSE objectives.
+        :param return_pred_xstart: include the unclipped clean-image estimate
+            for metrics, without another model forward pass.
         :return: a dict with the key "loss" containing a tensor of shape [N].
                  Some mean or variance settings may also have other keys.
         """
@@ -773,14 +778,17 @@ class GaussianDiffusion:
         terms = {}
 
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
-            terms["loss"] = self._vb_terms_bpd(
+            vb_terms = self._vb_terms_bpd(
                 model=model,
                 x_start=x_start,
                 x_t=x_t,
                 t=t,
                 clip_denoised=False,
                 model_kwargs=model_kwargs,
-            )["output"]
+            )
+            terms["loss"] = vb_terms["output"]
+            if return_pred_xstart:
+                terms["pred_xstart"] = vb_terms["pred_xstart"]
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
@@ -829,7 +837,7 @@ class GaussianDiffusion:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:
                 terms["loss"] = terms["mse"]
-            if image_loss_fn is not None:
+            if image_loss_fn is not None or return_pred_xstart:
                 if self.model_mean_type == ModelMeanType.START_X:
                     pred_xstart = model_output
                 elif self.model_mean_type == ModelMeanType.EPSILON:
@@ -839,6 +847,9 @@ class GaussianDiffusion:
                         model_output
                         - _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) * x_t
                     ) / _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape)
+                if return_pred_xstart:
+                    terms["pred_xstart"] = pred_xstart
+            if image_loss_fn is not None:
                 image_loss = image_loss_fn(pred_xstart, x_start)
                 if not isinstance(image_loss, th.Tensor) or image_loss.shape not in (
                     th.Size([]), th.Size([x_start.shape[0]])

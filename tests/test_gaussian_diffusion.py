@@ -939,3 +939,23 @@ def test_image_loss_rejects_unreduced_output():
             ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([1, 2]),
             image_loss_fn=torch.nn.MSELoss(reduction="none"),
         )
+
+
+@pytest.mark.parametrize("loss_type", list(LossType))
+def test_return_clean_prediction_preserves_objective_and_single_forward(loss_type):
+    from unittest.mock import Mock
+
+    diffusion = make_diffusion(loss_type=loss_type, model_mean_type=ModelMeanType.START_X)
+    clean = torch.zeros(2, 1, 2, 2)
+    prediction = torch.full_like(clean, 1.5)  # Verify no clipping for metrics.
+    noise = torch.ones_like(clean)
+    t = torch.tensor([1, 2])
+    model = Mock(return_value=prediction)
+    baseline = diffusion.training_losses(model, clean, t, noise=noise)
+    assert "pred_xstart" not in baseline
+    model.reset_mock()
+    result = diffusion.training_losses(model, clean, t, noise=noise, return_pred_xstart=True)
+    model.assert_called_once()
+    torch.testing.assert_close(result["pred_xstart"], prediction)
+    for key in baseline:
+        torch.testing.assert_close(result[key], baseline[key], rtol=0, atol=0)

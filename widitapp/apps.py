@@ -155,7 +155,21 @@ class WiDiTApp(Cluey):
 
         return None if use_diffusion else build_loss_fn(loss_fn)
 
-    @tool("model", "dataloaders", "loss")
+    @method
+    def metrics(self, use_diffusion: bool = True):
+        """Return named validation modules accepting (prediction, target).
+
+        Names omit the ``val/`` prefix. Each module returns a scalar batch
+        mean. Diffusion metrics use the unclipped clean-image estimate.
+        Extend with ``@method("super")`` and ``super().metrics(**kwargs)``.
+        """
+        import torch
+
+        if use_diffusion:
+            return {}
+        return {"mse": torch.nn.MSELoss(), "smoothl1": torch.nn.SmoothL1Loss()}
+
+    @tool("model", "dataloaders", "loss", "metrics")
     def train(
         self,
         epochs: int = 40,
@@ -194,6 +208,7 @@ class WiDiTApp(Cluey):
             run_name=run_name,
             wandb_logging=wandb,
             wandb_project=wandb_project,
+            metrics=self.metrics(use_diffusion=use_diffusion, **kwargs),
             **loss_kwargs,
         )
 
