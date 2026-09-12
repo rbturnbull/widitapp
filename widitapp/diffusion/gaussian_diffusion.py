@@ -4,6 +4,7 @@
 #     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
 
 
+import inspect
 import math
 
 import numpy as np
@@ -761,7 +762,12 @@ class GaussianDiffusion:
         :param noise: if specified, the specific Gaussian noise to try to remove.
         :param image_loss_fn: optional extra loss on (unclipped predicted x_0,
             x_start), returning a scalar batch mean or one loss per example.
-            Supported for MSE and RESCALED_MSE objectives.
+            Supported for MSE and RESCALED_MSE objectives. The callable may
+            also accept a keyword-only/optional ``alpha_bar`` argument, which
+            receives a [N] tensor of the cumulative product of alphas at the
+            sampled timesteps, so that the loss can compensate for the
+            timestep-dependent scaling of its gradient. Callables that do not
+            accept ``alpha_bar`` are still called with two arguments.
         :param return_pred_xstart: include the unclipped clean-image estimate
             for metrics, without another model forward pass.
         :return: a dict with the key "loss" containing a tensor of shape [N].
@@ -850,7 +856,12 @@ class GaussianDiffusion:
                 if return_pred_xstart:
                     terms["pred_xstart"] = pred_xstart
             if image_loss_fn is not None:
-                image_loss = image_loss_fn(pred_xstart, x_start)
+                alpha_bar = _extract_into_tensor(
+                    self.alphas_cumprod, t, (x_start.shape[0],)
+                )
+                image_loss = _call_image_loss_fn(
+                    image_loss_fn, pred_xstart, x_start, alpha_bar
+                )
                 if not isinstance(image_loss, th.Tensor) or image_loss.shape not in (
                     th.Size([]), th.Size([x_start.shape[0]])
                 ):
@@ -934,6 +945,22 @@ class GaussianDiffusion:
         }
 
 
+def _call_image_loss_fn(image_loss_fn, pred_xstart, x_start, alpha_bar):
+    """Call an image loss, passing alpha_bar only if it accepts that argument."""
+    inspected = getattr(image_loss_fn, "forward", image_loss_fn)
+    try:
+        parameters = inspect.signature(inspected).parameters
+    except (TypeError, ValueError):
+        return image_loss_fn(pred_xstart, x_start)
+    accepts = "alpha_bar" in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts:
+        return image_loss_fn(pred_xstart, x_start, alpha_bar=alpha_bar)
+    return image_loss_fn(pred_xstart, x_start)
+
+
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """
     Extract values from a 1-D numpy array for a batch of indices.
@@ -943,7 +970,8 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
                             dimension equal to the length of timesteps.
     :return: a tensor of shape [batch_size, 1, ...] where the shape has K dims.
     """
-    res = th.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
+    # Cast on CPU first: MPS cannot receive the float64 schedule arrays.
+    res = th.from_numpy(arr).float().to(device=timesteps.device)[timesteps]
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res + th.zeros(broadcast_shape, device=timesteps.device)

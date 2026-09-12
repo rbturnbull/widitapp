@@ -1141,9 +1141,10 @@ def test_validation_custom_metrics_do_not_change_loss(use_diffusion):
     metric = CaptureMetric()
     result = _run_validation_loop(**kwargs, extra_criteria={"custom": metric})
     assert result["loss"] == baseline["loss"]
-    assert result["custom"] == (metric.prediction - data).abs().mean().item()
+    expected_target = data.to(metric.prediction.device)
+    assert result["custom"] == (metric.prediction - expected_target).abs().mean().item()
     if not use_diffusion:
-        torch.testing.assert_close(metric.prediction, data)
+        torch.testing.assert_close(metric.prediction, expected_target)
     _, payload = build_val_log_payload(result, use_diffusion=use_diffusion, epoch=1, train_steps=2)
     assert payload["val/custom"] == result["custom"]
 
@@ -1163,3 +1164,40 @@ def test_nonfinite_metric_does_not_discard_finite_validation_loss():
     )
     assert result["loss"] == 0.0
     assert math.isnan(result["custom"])
+
+
+@pytest.mark.parametrize("name", ["", "loss", "val/custom", 1])
+def test_validation_rejects_invalid_metric_names(name):
+    accelerator = FakeAccelerator()
+    model = Mock(spec=torch.nn.Module)
+    data = torch.ones(2, 1, 2, 2)
+    with pytest.raises(ValueError, match="Metric names must be nonempty, omit 'val/', and cannot be 'loss'"):
+        _run_validation_loop(
+            accelerator=accelerator, model_for_eval=model, diffusion=None,
+            dataloader=DataLoader(TensorDataset(data, data), batch_size=2),
+            device=accelerator.device, dtype=torch.float32, use_diffusion=False,
+            criterion=build_loss_fn("mse"), extra_criteria={name: torch.nn.L1Loss()},
+        )
+    model.assert_not_called()
+
+
+@pytest.mark.parametrize("output_kind", ["python_scalar", "per_example", "unreduced"])
+def test_validation_rejects_metrics_without_scalar_tensor_output(output_kind):
+    class InvalidMetric(torch.nn.Module):
+        def forward(self, prediction, target):
+            errors = (prediction - target).abs()
+            if output_kind == "python_scalar":
+                return errors.mean().item()
+            if output_kind == "per_example":
+                return errors.flatten(start_dim=1).mean(dim=1)
+            return errors
+
+    accelerator = FakeAccelerator()
+    data = torch.ones(2, 1, 2, 2)
+    with pytest.raises(ValueError, match="Metric 'custom' must return a scalar batch mean tensor"):
+        _run_validation_loop(
+            accelerator=accelerator, model_for_eval=IdentityModel(), diffusion=None,
+            dataloader=DataLoader(TensorDataset(data, data), batch_size=2),
+            device=accelerator.device, dtype=torch.float32, use_diffusion=False,
+            criterion=build_loss_fn("mse"), extra_criteria={"custom": InvalidMetric()},
+        )

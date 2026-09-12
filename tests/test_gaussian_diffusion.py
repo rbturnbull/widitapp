@@ -115,15 +115,23 @@ def test_gaussian_diffusion_rejects_invalid_betas():
         make_diffusion(betas=np.array([0.1, 0.0, 0.2], dtype=np.float64))
 
 
-def test_extract_into_tensor_broadcasts_values_to_shape():
+@pytest.mark.parametrize("device", [
+    "cpu",
+    pytest.param("mps", marks=pytest.mark.skipif(
+        not torch.backends.mps.is_available(), reason="MPS is unavailable"
+    )),
+])
+def test_extract_into_tensor_broadcasts_values_to_shape(device):
     values = np.array([1.0, 2.0, 3.0], dtype=np.float64)
-    timesteps = torch.tensor([2, 0])
+    timesteps = torch.tensor([2, 0], device=device)
 
     result = _extract_into_tensor(values, timesteps, (2, 3, 4))
 
     assert result.shape == (2, 3, 4)
-    assert torch.allclose(result[0], torch.full((3, 4), 3.0))
-    assert torch.allclose(result[1], torch.full((3, 4), 1.0))
+    assert result.dtype == torch.float32
+    assert result.device == timesteps.device
+    assert torch.allclose(result[0], torch.full((3, 4), 3.0, device=device))
+    assert torch.allclose(result[1], torch.full((3, 4), 1.0, device=device))
 
 
 def test_q_mean_variance_returns_expected_shapes_and_values():
@@ -941,6 +949,88 @@ def test_image_loss_rejects_unreduced_output():
         )
 
 
+def test_image_loss_receives_alpha_bar_for_sampled_timesteps():
+    diffusion = make_diffusion()
+    clean = torch.zeros(2, 1, 2, 2)
+    t = torch.tensor([0, 2])
+    seen = []
+
+    def image_loss(pred, target, *, alpha_bar):
+        seen.append(alpha_bar)
+        return mean_flat((pred - target) ** 2).mean()
+
+    diffusion.training_losses(ZeroModel(), clean, t, image_loss_fn=image_loss)
+
+    assert len(seen) == 1
+    alpha_bar = seen[0]
+    assert alpha_bar.shape == torch.Size([2])
+    assert alpha_bar.device == t.device
+    torch.testing.assert_close(
+        alpha_bar,
+        torch.as_tensor(diffusion.alphas_cumprod[t.numpy()], dtype=torch.float32),
+    )
+
+
+def test_image_loss_without_alpha_bar_is_called_with_two_arguments():
+    diffusion = make_diffusion()
+    calls = []
+
+    def image_loss(pred, target):
+        calls.append((pred, target))
+        return mean_flat((pred - target) ** 2).mean()
+
+    diffusion.training_losses(
+        ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([1, 2]), image_loss_fn=image_loss
+    )
+
+    assert len(calls) == 1
+
+
+def test_image_loss_module_with_two_argument_forward_is_not_given_alpha_bar():
+    class TwoArgumentLoss(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, prediction, target):
+            self.calls += 1
+            return mean_flat((prediction - target) ** 2).mean()
+
+    diffusion = make_diffusion()
+    image_loss = TwoArgumentLoss()
+
+    diffusion.training_losses(
+        ZeroModel(), torch.zeros(2, 1, 2, 2), torch.tensor([1, 2]), image_loss_fn=image_loss
+    )
+
+    assert image_loss.calls == 1
+
+
+def test_image_loss_module_declaring_alpha_bar_receives_it():
+    class AlphaBarLoss(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.seen = None
+
+        def forward(self, prediction, target, alpha_bar=None):
+            self.seen = alpha_bar
+            return mean_flat((prediction - target) ** 2).mean()
+
+    diffusion = make_diffusion()
+    image_loss = AlphaBarLoss()
+    t = torch.tensor([1, 2])
+
+    diffusion.training_losses(
+        ZeroModel(), torch.zeros(2, 1, 2, 2), t, image_loss_fn=image_loss
+    )
+
+    assert image_loss.seen is not None
+    torch.testing.assert_close(
+        image_loss.seen,
+        torch.as_tensor(diffusion.alphas_cumprod[t.numpy()], dtype=torch.float32),
+    )
+
+
 @pytest.mark.parametrize("loss_type", list(LossType))
 def test_return_clean_prediction_preserves_objective_and_single_forward(loss_type):
     from unittest.mock import Mock
@@ -959,3 +1049,17 @@ def test_return_clean_prediction_preserves_objective_and_single_forward(loss_typ
     torch.testing.assert_close(result["pred_xstart"], prediction)
     for key in baseline:
         torch.testing.assert_close(result[key], baseline[key], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("loss_type", [LossType.KL, LossType.RESCALED_KL])
+def test_image_loss_rejects_kl_objectives_before_model_forward(loss_type):
+    from unittest.mock import Mock
+
+    diffusion = make_diffusion(loss_type=loss_type)
+    model = Mock()
+    with pytest.raises(ValueError, match="image_loss_fn requires an MSE diffusion objective"):
+        diffusion.training_losses(
+            model, torch.zeros(2, 1, 2, 2), torch.tensor([1, 2]),
+            image_loss_fn=torch.nn.MSELoss(),
+        )
+    model.assert_not_called()
