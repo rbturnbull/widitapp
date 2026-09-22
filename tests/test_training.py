@@ -60,12 +60,10 @@ class IdentityModel(torch.nn.Module):
 @contextmanager
 def mock_cuda_for_cpu_training():
     # Bypass the training CUDA requirement while keeping all computation on CPU.
-    # Exercise AdamW's CUDA-build path even on macOS, but mock its driver query.
-    with patch("torch.cuda.is_available", return_value=True), patch(
-        "torch.backends.cuda.is_built", return_value=True
-    ), patch("torch.cuda.is_current_stream_capturing", return_value=False), patch(
-        "torch.cuda.synchronize"
-    ):
+    # Only widitapp's own check is faked: patching torch.cuda.is_available globally
+    # makes torch internals (e.g. the optimizer's graph-capture health check) try to
+    # initialise a real CUDA context, which fails on CUDA-built wheels without a GPU.
+    with patch("widitapp.training.cuda_is_available", return_value=True), patch("torch.cuda.synchronize"):
         yield
 
 
@@ -326,7 +324,7 @@ def test_run_validation_loop_rejects_bad_batch():
 
 
 def test_train_requires_cuda():
-    with patch("torch.cuda.is_available", return_value=False):
+    with patch("widitapp.training.cuda_is_available", return_value=False):
         with pytest.raises(AssertionError, match="requires at least one GPU"):
             training_module.train(
                 model=torch.nn.Linear(1, 1),
@@ -1090,7 +1088,9 @@ def test_clear_after_cuda_oom_clears_gradients_and_cuda_cache():
     for parameter in model.parameters():
         parameter.grad = torch.ones_like(parameter)
 
-    with patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.empty_cache") as empty_cache:
+    with patch("widitapp.training.cuda_is_available", return_value=True), patch(
+        "torch.cuda.empty_cache"
+    ) as empty_cache:
         clear_after_cuda_oom(optimizer)
 
     assert all(parameter.grad is None for parameter in model.parameters())

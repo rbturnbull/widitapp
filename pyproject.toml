@@ -22,8 +22,12 @@ python = ">=3.10,<3.15"
 cluey = ">=0.1.0"
 WiDiT = ">=0.1.15"
 accelerate = ">=1.10.1"
-pandas = ">=2.3.2"
 wandb = ">=0.21.4"
+# Split so Python 3.14 gets a numpy with cp314 wheels; 2.3.x requires Python >=3.11.
+numpy = [
+    {version = ">=2.2.6", python = "<3.11"},
+    {version = ">=2.3.2", python = ">=3.11"},
+]
 
 
 [tool.poetry.group.dev.dependencies]

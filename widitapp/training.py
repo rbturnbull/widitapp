@@ -96,9 +96,15 @@ def tensor_info_for_logging(tensor: torch.Tensor) -> str:
     return f"shape={tuple(tensor.shape)}, dtype={tensor.dtype}, device={tensor.device}"
 
 
+def cuda_is_available() -> bool:
+    # Indirection so tests can simulate a GPU host without patching torch.cuda
+    # globally, which makes torch internals attempt real CUDA initialisation.
+    return torch.cuda.is_available()
+
+
 def clear_after_cuda_oom(optimizer: torch.optim.Optimizer):
     optimizer.zero_grad(set_to_none=True)
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.empty_cache()
 
 
@@ -231,7 +237,7 @@ def train(
 ):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    assert torch.cuda.is_available(), "Training currently requires at least one GPU."
+    assert cuda_is_available(), "Training currently requires at least one GPU."
 
     accelerator = Accelerator(mixed_precision=("no" if precision == "fp32" else precision))
     device = accelerator.device
@@ -375,7 +381,7 @@ def train(
                 if not is_cuda_out_of_memory(error):
                     raise
                 local_oom.fill_(1.0)
-                if torch.cuda.is_available():
+                if cuda_is_available():
                     torch.cuda.empty_cache()
 
             any_oom = accelerator.reduce(local_oom, reduction="sum").item() > 0
